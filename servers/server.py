@@ -5,7 +5,7 @@ import toml
 import numpy as np
 
 
-configs = toml.load('servers/configs/config.toml')
+configs = toml.load('servers/configs/config_OneGPU.toml')
 
 app = flask.Flask(__name__)
 session = ort.InferenceSession(configs['model-path'], providers=configs['providers'])
