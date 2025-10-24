@@ -113,6 +113,33 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
     elif scheduler_type == 'exponential':
         gamma = kwargs.get('gamma', 0.95)
         return optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    # CosineAnnealingLR学习率调度器：余弦退火学习率调度器
+    # 按照余弦函数方式逐渐降低学习率，适用于大规模数据集
+    elif scheduler_type == 'cosine':
+        # T_max是余弦周期的一半，通常设为总训练轮数
+        T_max = kwargs.get('T_max', 50)
+        # eta_min是最小学习率，默认为0
+        eta_min = kwargs.get('eta_min', 0)
+        return optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, 
+            T_max=T_max, 
+            eta_min=eta_min
+        )
+    # CosineAnnealingWarmRestarts学习率调度器：带热重启的余弦退火学习率调度器
+    # 在余弦退火的基础上，定期重新开始学习率调度，有助于跳出局部最优
+    elif scheduler_type == 'cosine_warm_restarts':
+        # T_0是第一个重启周期的大小
+        T_0 = kwargs.get('T_0', 10)
+        # T_mult控制后续重启周期的增长因子
+        T_mult = kwargs.get('T_mult', 1)
+        # eta_min是最小学习率，默认为0
+        eta_min = kwargs.get('eta_min', 0)
+        return optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, 
+            T_0=T_0, 
+            T_mult=T_mult, 
+            eta_min=eta_min
+        )
     else:
         # 默认使用StepLR
         print(f"警告：未知的学习率调度器类型 '{scheduler_type}'，默认使用StepLR")

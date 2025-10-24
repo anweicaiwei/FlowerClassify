@@ -87,7 +87,7 @@ def main():
     device = torch.device(configs['device'])
     
     # 初始化模型
-    model = FlowerNet(num_classes=num_classes, pretrained=configs['load-pretrained'])
+    model = FlowerNet(num_classes=num_classes, pretrained=configs['load-pretrained'], model_name=configs['model-name'])
     model = model.to(device)
     
     # 初始化绘图管理器
@@ -110,19 +110,17 @@ def main():
     optimizer = get_optimizer(
         model.parameters(),
         optimizer_type,
-        configs['learning-rate'],
-        configs['weight-decay']
+        learning_rate=configs['learning-rate'],
+        weight_decay=configs['weight-decay']
     )
     
     # 添加学习率调度器
-    lr_scheduler_step_size = configs.get('lr-scheduler-step-size', 10)
-    lr_scheduler_gamma = configs.get('lr-scheduler-gamma', 0.5)
     scheduler_type = configs.get('lr-scheduler-type', 'step')
     scheduler = get_lr_scheduler(
         optimizer,
         scheduler_type,
-        step_size=lr_scheduler_step_size,
-        gamma=lr_scheduler_gamma
+        step_size=configs.get('lr-scheduler-step-size', 10),
+        gamma=configs.get('lr-scheduler-gamma', 0.5)
     )
     
     # 早停机制相关参数
@@ -150,7 +148,7 @@ def main():
     print(f'\n---------- training start at: {device} ----------\n')
     print(f"损失函数: {loss_function_type}")
     print(f"优化器: {optimizer_type}")
-    print(f"学习率调度器: {scheduler_type}，每{lr_scheduler_step_size}个epoch降低为原来的{lr_scheduler_gamma}倍")
+    print(f"学习率调度器: {scheduler_type}，每{configs.get('lr-scheduler-step-size', 10)}个epoch降低为原来的{configs.get('lr-scheduler-gamma', 0.5)}倍")
     print(f"早停机制配置: 连续{early_stopping_patience}个epoch无提升则停止训练")
     
     # 训练循环

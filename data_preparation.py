@@ -1,13 +1,13 @@
-import pandas as pd  # 导入pandas用于读取CSV
 import os  # 导入os用于路径处理
 import shutil  # 导入shutil用于文件复制
-import random  # 导入random用于随机操作
+import toml
 
-import torch
-import torchvision.transforms as transforms
+import pandas as pd  # 导入pandas用于读取CSV
 from torch.utils.data import Dataset
 from torchvision.io import read_image  # 导入读取图像的函数
+from tqdm import tqdm  # 导入tqdm用于显示进度条
 
+configs = toml.load('configs/config_OneGPU.toml')
 
 def create_category_mapping(df):
     """创建类别ID到索引的映射，确保类别索引从0开始连续"""
@@ -104,6 +104,7 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     # 按类别ID分组
     grouped = df.groupby('category_id')
     
+    # 分割数据，但不立即复制文件
     for category_id, group in grouped:
         # 对每个类别的数据进行打乱
         group = group.sample(frac=1, random_state=42).reset_index(drop=True)
@@ -117,30 +118,6 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
         test_group = group.iloc[valid_size:valid_size+test_size].copy()
         train_group = group.iloc[valid_size+test_size:].copy()
         
-        # 将训练集图像复制到新目录
-        for _, row in train_group.iterrows():
-            src_path = os.path.join(img_dir, row['filename'])
-            dst_path = os.path.join(train_img_dir, row['filename'])
-            # 如果文件不存在才复制，避免覆盖
-            if not os.path.exists(dst_path):
-                shutil.copy2(src_path, dst_path)
-        
-        # 将验证集图像复制到新目录
-        for _, row in valid_group.iterrows():
-            src_path = os.path.join(img_dir, row['filename'])
-            dst_path = os.path.join(valid_img_dir, row['filename'])
-            # 如果文件不存在才复制，避免覆盖
-            if not os.path.exists(dst_path):
-                shutil.copy2(src_path, dst_path)
-        
-        # 将测试集图像复制到新目录
-        for _, row in test_group.iterrows():
-            src_path = os.path.join(img_dir, row['filename'])
-            dst_path = os.path.join(test_img_dir, row['filename'])
-            # 如果文件不存在才复制，避免覆盖
-            if not os.path.exists(dst_path):
-                shutil.copy2(src_path, dst_path)
-    
         # 添加到训练集、验证集和测试集列表
         train_data.append(train_group)
         valid_data.append(valid_group)
@@ -151,7 +128,39 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     valid_df = pd.concat(valid_data, ignore_index=True)
     test_df = pd.concat(test_data, ignore_index=True)
     
+    # 统计需要处理的总文件数
+    total_files = len(train_df) + len(valid_df) + len(test_df)
+    print(f"开始处理数据集，总计 {total_files} 个文件...")
+    
+    # 复制训练集图像，显示总体进度
+    print("\n复制训练集图像...")
+    for _, row in tqdm(train_df.iterrows(), total=len(train_df), desc="训练集", unit="文件"):
+        src_path = os.path.join(img_dir, row['filename'])
+        dst_path = os.path.join(train_img_dir, row['filename'])
+        # 如果文件不存在才复制，避免覆盖
+        if not os.path.exists(dst_path):
+            shutil.copy2(src_path, dst_path)
+    
+    # 复制验证集图像，显示总体进度
+    print("\n复制验证集图像...")
+    for _, row in tqdm(valid_df.iterrows(), total=len(valid_df), desc="验证集", unit="文件"):
+        src_path = os.path.join(img_dir, row['filename'])
+        dst_path = os.path.join(valid_img_dir, row['filename'])
+        # 如果文件不存在才复制，避免覆盖
+        if not os.path.exists(dst_path):
+            shutil.copy2(src_path, dst_path)
+    
+    # 复制测试集图像，显示总体进度
+    print("\n复制测试集图像...")
+    for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="测试集", unit="文件"):
+        src_path = os.path.join(img_dir, row['filename'])
+        dst_path = os.path.join(test_img_dir, row['filename'])
+        # 如果文件不存在才复制，避免覆盖
+        if not os.path.exists(dst_path):
+            shutil.copy2(src_path, dst_path)
+    
     # 保存新的CSV文件
+    print("\n正在保存CSV文件...")
     train_csv_path = os.path.join('datasets', 'train_split.csv')
     valid_csv_path = os.path.join('datasets', 'valid_split.csv')
     test_csv_path = os.path.join('datasets', 'test_split.csv')
@@ -160,7 +169,7 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     valid_df.to_csv(valid_csv_path, index=False)
     test_df.to_csv(test_csv_path, index=False)
     
-    print(f"训练集大小: {len(train_df)}")
+    print(f"\n训练集大小: {len(train_df)}")
     print(f"验证集大小: {len(valid_df)}")
     print(f"测试集大小: {len(test_df)}")
     print(f"类别数量: {num_classes}")
@@ -179,13 +188,13 @@ def main():
     """主函数，当脚本直接运行时执行数据预处理"""
     # 调用数据预处理函数，分割为train、valid、test三个数据集
     prepare_datasets(
-        csv_file='datasets/data_labels.csv',
-        img_dir='datasets/data/train',
-        valid_ratio=0.15,  # 15%的数据作为验证集
-        test_ratio=0.15    # 15%的数据作为测试集
+        csv_file=configs['data-label'],
+        img_dir=configs['data-root'],
+        valid_ratio=configs['valid-split-ratio'],
+        test_ratio=configs['test-split-ratio']
     )
     
-    print("数据预处理完成！已生成train、valid、test三个数据集及其CSV文件。")
+    print("\n数据预处理完成！已生成train、valid、test三个数据集及其CSV文件。")
 
 
 if __name__ == '__main__':
