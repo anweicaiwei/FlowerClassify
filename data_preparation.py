@@ -92,9 +92,20 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     train_img_dir = os.path.join('datasets', 'train')
     valid_img_dir = os.path.join('datasets', 'valid')
     test_img_dir = os.path.join('datasets', 'test')
-    os.makedirs(train_img_dir, exist_ok=True)
-    os.makedirs(valid_img_dir, exist_ok=True)
-    os.makedirs(test_img_dir, exist_ok=True)
+    
+    # 清空已有的目录（如果存在）并显示进度条
+    for dir_path in [train_img_dir, valid_img_dir, test_img_dir]:
+        if os.path.exists(dir_path):
+            # 获取目录中的所有文件
+            files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
+            if files:
+                print(f"清空目录: {dir_path}")
+                # 使用tqdm显示清空进度
+                for file_name in tqdm(files, desc=f"清空{os.path.basename(dir_path)}", unit="文件"):
+                    file_path = os.path.join(dir_path, file_name)
+                    os.remove(file_path)
+        # 确保目录存在
+        os.makedirs(dir_path, exist_ok=True)
     
     # 按类别分割数据集，确保每个类别的数据都能被合理分割
     train_data = []
@@ -137,27 +148,24 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     for _, row in tqdm(train_df.iterrows(), total=len(train_df), desc="训练集", unit="文件"):
         src_path = os.path.join(img_dir, row['filename'])
         dst_path = os.path.join(train_img_dir, row['filename'])
-        # 如果文件不存在才复制，避免覆盖
-        if not os.path.exists(dst_path):
-            shutil.copy2(src_path, dst_path)
+        # 直接复制文件，覆盖已存在的文件
+        shutil.copy2(src_path, dst_path)
     
     # 复制验证集图像，显示总体进度
     print("\n复制验证集图像...")
     for _, row in tqdm(valid_df.iterrows(), total=len(valid_df), desc="验证集", unit="文件"):
         src_path = os.path.join(img_dir, row['filename'])
         dst_path = os.path.join(valid_img_dir, row['filename'])
-        # 如果文件不存在才复制，避免覆盖
-        if not os.path.exists(dst_path):
-            shutil.copy2(src_path, dst_path)
+        # 直接复制文件，覆盖已存在的文件
+        shutil.copy2(src_path, dst_path)
     
     # 复制测试集图像，显示总体进度
     print("\n复制测试集图像...")
     for _, row in tqdm(test_df.iterrows(), total=len(test_df), desc="测试集", unit="文件"):
         src_path = os.path.join(img_dir, row['filename'])
         dst_path = os.path.join(test_img_dir, row['filename'])
-        # 如果文件不存在才复制，避免覆盖
-        if not os.path.exists(dst_path):
-            shutil.copy2(src_path, dst_path)
+        # 直接复制文件，覆盖已存在的文件
+        shutil.copy2(src_path, dst_path)
     
     # 保存新的CSV文件
     print("\n正在保存CSV文件...")
