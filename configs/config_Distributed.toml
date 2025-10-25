@@ -10,24 +10,20 @@ master-addr = "localhost"
 # 主节点端口：用于分布式训练通信
 master-port = "12355"
 
-# 学习率：控制模型参数更新的步长，较小的值有助于稳定训练
-# 在分布式训练中，由于总batch size增大，学习率可能需要相应调整
-learning-rate = 0.0004
-
 # 批次大小：每次训练迭代使用的样本总量，将被平均分配给各个进程
-batch-size = 64
+batch-size = 128
 
 # 训练轮次：整个数据集训练的次数
-num-epochs = 50
+num-epochs = 100
 
 # 数据加载线程数：每个进程用于并行加载数据的线程数量，可根据CPU核心数调整
-num-workers = 8
+num-workers = 20
+
+# 模型名称：指定使用的模型架构
+model-name = "resnet18"
 
 # 类别数量：花卉分类任务中的类别总数
-num-classes = 10
-
-# 权重衰减：L2正则化系数，用于防止过拟合
-weight-decay = 0.0001
+num-classes = 0
 
 # 日志打印间隔：每训练多少个批次打印一次日志
 log-interval = 10
@@ -39,7 +35,8 @@ load-checkpoint = false
 load-pretrained = false
 
 # 加载检查点路径：预训练模型或之前保存的检查点路径
-load-checkpoint-path = "checkpoints/best-ckpt_distribute.pt"
+# 如果设置了此值，则优先使用此路径，忽略checkpoint-timestamp和checkpoint-type配置
+# load-checkpoint-path = "checkpoints/best-ckpt_distribute.pt"
 
 ## 最佳模型保存路径：训练过程中性能最好的模型将保存在此路径
 # best-checkpoint-path = "checkpoints/best-ckpt_distribute.pt"
@@ -50,11 +47,17 @@ load-checkpoint-path = "checkpoints/best-ckpt_distribute.pt"
 # 损失函数类型：指定训练使用的损失函数
 loss-function = "cross_entropy"
 
+# 学习率：控制模型参数更新的步长，较小的值有助于稳定训练
+learning-rate = 0.0004
+
+# 权重衰减：L2正则化系数，用于防止过拟合
+weight-decay = 0.0001
+
 # 优化器类型：指定训练使用的优化器
 optimizer-type = "adam"
 
 # 学习率调度器类型：指定训练使用的学习率调度器类型
-lr-scheduler-type = "step"
+lr-scheduler-type = "cosine"
 
 # 学习率调度器步长：每隔多少个epoch调整一次学习率
 lr-scheduler-step-size = 10
@@ -63,4 +66,4 @@ lr-scheduler-step-size = 10
 lr-scheduler-gamma = 0.5
 
 # 早停机制耐心值：连续多少个epoch无性能提升后停止训练
-early-stopping-patience = 15
+early-stopping-patience = 10

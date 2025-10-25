@@ -138,7 +138,7 @@ def train(rank, world_size, configs):
     log_interval = configs['log-interval']
     
     # 初始化模型
-    model = FlowerNet(num_classes=configs['num-classes'], pretrained=configs['load-pretrained'])
+    model = FlowerNet(num_classes=configs['num-classes'], pretrained=configs['load-pretrained'], model_name=configs['model-name'])
     model = model.to(rank)  # 将模型放到当前GPU上
     
     # 使用DDP包装模型

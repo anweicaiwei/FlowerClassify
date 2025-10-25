@@ -4,6 +4,7 @@
     该模块提供了创建损失函数、优化器和学习率调度器的函数。
 """
 
+import torch
 import torch.nn as nn
 import torch.optim as optim
 
@@ -27,13 +28,62 @@ def get_loss_function(loss_function_type):
     # BCEWithLogitsLoss损失函数：二分类任务的损失函数，适用于输出为logits的情况
     elif loss_function_type == 'bce_with_logits':
         return nn.BCEWithLogitsLoss()
+    # L1正则化损失函数
+    elif loss_function_type == 'l1_regularized_cross_entropy':
+        return L1RegularizedLoss()
     else:
         # 默认使用CrossEntropyLoss
         print(f"警告：未知的损失函数类型 '{loss_function_type}'，默认使用CrossEntropyLoss")
         return nn.CrossEntropyLoss()
 
 
-def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay):
+class L1RegularizedLoss(nn.Module):
+    """
+    结合L1正则化的交叉熵损失函数
+    用于同时优化模型分类性能和参数稀疏性
+    """
+    def __init__(self, l1_lambda=0.001, weight=None, size_average=None, ignore_index=-100,
+                 reduce=None, reduction='mean'):
+        super().__init__()
+        # 支持标准CrossEntropyLoss的所有参数
+        self.cross_entropy_loss = nn.CrossEntropyLoss(weight=weight, size_average=size_average,
+                                                     ignore_index=ignore_index, reduce=reduce,
+                                                     reduction=reduction)
+        self.l1_lambda = l1_lambda
+        # 存储需要计算L1正则化的模型
+        self.model = None
+        
+    def set_model(self, model):
+        """设置需要计算L1正则化的模型"""
+        self.model = model
+        return self  # 支持链式调用
+        
+    def set_l1_lambda(self, l1_lambda):
+        """动态调整L1正则化系数"""
+        self.l1_lambda = l1_lambda
+        return self  # 支持链式调用
+        
+    def forward(self, outputs, targets):
+        """标准PyTorch损失函数接口，只接受outputs和targets"""
+        if self.model is None:
+            raise ValueError("模型未设置，请先调用set_model方法")
+            
+        # 计算交叉熵损失
+        ce_loss = self.cross_entropy_loss(outputs, targets)
+        
+        # 计算L1正则化项
+        l1_reg = 0.0
+        with torch.no_grad():
+            for param in self.model.parameters():
+                if param.requires_grad:
+                    l1_reg += torch.sum(torch.abs(param))  # 使用torch.abs和torch.sum更高效
+        
+        # 组合损失
+        total_loss = ce_loss + self.l1_lambda * l1_reg
+        return total_loss
+
+
+def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay, l1_lambda=None):
     """
     根据指定的优化器类型创建并返回相应的优化器
     
@@ -42,21 +92,50 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay)
         optimizer_type: 字符串，表示优化器类型
         learning_rate: 浮点数，表示学习率
         weight_decay: 浮点数，表示权重衰减
+        l1_lambda: 浮点数，表示L1正则化系数，如果为None则不使用参数分组
     
     返回:
         创建的优化器实例
     """
+    # 如果指定了L1正则化系数，则进行参数分组
+    if l1_lambda is not None and l1_lambda > 0:
+        # 将参数分为两组：带L1正则化的权重参数和其他参数
+        decay_params = []  # 带权重衰减的参数
+        no_decay_params = []  # 不带权重衰减的参数（偏置、批归一化参数等）
+        
+        # 检查model_parameters是否是named_parameters
+        if hasattr(model_parameters, 'named_parameters'):
+            # 如果model_parameters是模型实例，获取named_parameters
+            for name, param in model_parameters.named_parameters():
+                if param.requires_grad:
+                    if 'bias' in name or 'bn' in name or 'norm' in name.lower():
+                        no_decay_params.append(param)
+                    else:
+                        decay_params.append(param)
+        else:
+            # 假设model_parameters是parameters()的结果，无法获取名称信息
+            # 这里简化处理，所有参数都应用相同的权重衰减
+            decay_params = list(model_parameters)
+            no_decay_params = []
+        
+        param_groups = [
+            {'params': decay_params, 'weight_decay': weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0}
+        ]
+    else:
+        param_groups = model_parameters
+    
     #  Adam优化器：自适应学习率优化器，适用于大多数情况
     if optimizer_type == 'adam':
         return optim.Adam(
-            model_parameters,
+            param_groups,
             lr=learning_rate,
             weight_decay=weight_decay
         )
     # SGD优化器：随机梯度下降优化器，适用于小批量数据
     elif optimizer_type == 'sgd':
         return optim.SGD(
-            model_parameters,
+            param_groups,
             lr=learning_rate,
             weight_decay=weight_decay,
             momentum=0.9  # SGD的动量参数
@@ -64,7 +143,7 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay)
     # RMSprop优化器：均方根传播优化器，适用于处理稀疏梯度
     elif optimizer_type == 'rmsprop':
         return optim.RMSprop(
-            model_parameters,
+            param_groups,
             lr=learning_rate,
             weight_decay=weight_decay,
             momentum=0.9
@@ -73,7 +152,7 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay)
         # 默认使用Adam优化器
         print(f"警告：未知的优化器类型 '{optimizer_type}'，默认使用Adam优化器")
         return optim.Adam(
-            model_parameters,
+            param_groups,
             lr=learning_rate,
             weight_decay=weight_decay
         )

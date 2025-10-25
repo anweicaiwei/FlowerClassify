@@ -3,7 +3,7 @@ import torchvision.models as models
 
 
 class FlowerNet(nn.Module):
-    def __init__(self, num_classes, pretrained, model_name):
+    def __init__(self, num_classes, pretrained, model_name, use_layer_norm=False):
         super().__init__()
 
         # 根据指定的模型名称选择适当的ResNet变体
@@ -45,6 +45,13 @@ class FlowerNet(nn.Module):
 
         # 添加Dropout层来防止过拟合，特别适合大数据集
         self.dropout = nn.Dropout(p=0.5)
+        # 增加第二个Dropout层以增强正则化效果
+        self.dropout2 = nn.Dropout(p=0.3)
+        
+        # 可选的LayerNorm层
+        self.use_layer_norm = use_layer_norm
+        if self.use_layer_norm:
+            self.layer_norm = nn.LayerNorm(feature_dim)
 
         # 全连接分类层，使用两层结构增强分类能力
         self.fc1 = nn.Linear(in_features=feature_dim, out_features=512)
@@ -67,13 +74,17 @@ class FlowerNet(nn.Module):
         # 池化和扁平化
         outputs = self.avgpool(outputs)
         outputs = self.flatten(outputs)
+        
+        # 可选的LayerNorm
+        if self.use_layer_norm:
+            outputs = self.layer_norm(outputs)
 
         # 分类层，带Dropout防止过拟合
         outputs = self.dropout(outputs)
         outputs = self.fc1(outputs)
         outputs = self.fc_bn(outputs)
         outputs = self.fc_relu(outputs)
-        outputs = self.dropout(outputs)
+        outputs = self.dropout2(outputs)
         outputs = self.fc2(outputs)
 
         return outputs

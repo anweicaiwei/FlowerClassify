@@ -86,8 +86,14 @@ def main():
     # 设置设备
     device = torch.device(configs['device'])
     
-    # 初始化模型
-    model = FlowerNet(num_classes=num_classes, pretrained=configs['load-pretrained'], model_name=configs['model-name'])
+    # 初始化模型，添加LayerNorm选项
+    use_layer_norm = configs.get('use-layer-norm', False)
+    model = FlowerNet(
+        num_classes=num_classes, 
+        pretrained=configs['load-pretrained'], 
+        model_name=configs['model-name'],
+        use_layer_norm=use_layer_norm
+    )
     model = model.to(device)
     
     # 初始化绘图管理器
@@ -104,14 +110,26 @@ def main():
     # 从配置文件读取损失函数类型并获取损失函数
     loss_function_type = configs.get('loss-function', 'cross_entropy')
     criterion = get_loss_function(loss_function_type)
+
+    # 如果是L1正则化损失，设置模型
+    if loss_function_type == 'l1_regularized_cross_entropy':
+        criterion = criterion.set_model(model)
+        # 可选：从配置中设置l1_lambda
+        l1_lambda = configs.get('l1-lambda', 0.001)
+        criterion = criterion.set_l1_lambda(l1_lambda)
+        # 从配置文件读取L1正则化相关参数
+        use_l1_regularization = True
+
+
     
     # 从配置文件读取优化器类型并获取优化器
     optimizer_type = configs.get('optimizer-type', 'adam')
     optimizer = get_optimizer(
-        model.parameters(),
+        model,  # 传递整个模型实例而不仅仅是参数
         optimizer_type,
         learning_rate=configs['learning-rate'],
-        weight_decay=configs['weight-decay']
+        weight_decay=configs['weight-decay'],
+        l1_lambda=l1_lambda if l1_lambda > 0 else None
     )
     
     # 添加学习率调度器
@@ -126,6 +144,10 @@ def main():
     # 早停机制相关参数
     early_stopping_patience = configs.get('early-stopping-patience', 15)
     early_stopping_counter = 0
+    
+    # 梯度裁剪参数
+    use_grad_clip = configs.get('use-grad-clip', False)
+    grad_clip_value = configs.get('grad-clip-value', 1.0)
     
     # 创建基于时间戳的checkpoint目录
     checkpoints_dir = os.path.join('checkpoints', 'OneGPU',timestamp)
@@ -143,13 +165,28 @@ def main():
     os.makedirs(os.path.dirname(load_checkpoint_path), exist_ok=True)
     
     if configs['load-checkpoint']:
-        model.load_state_dict(torch.load(load_checkpoint_path, map_location=device, weights_only=True))
+        try:
+            # 使用strict=False来允许部分加载，忽略不匹配的键
+            model.load_state_dict(
+                torch.load(load_checkpoint_path, map_location=device, weights_only=True),
+                strict=False
+            )
+            print(f"成功加载检查点（非严格模式）: {load_checkpoint_path}")
+        except Exception as e:
+            print(f"加载检查点失败: {e}")
+            print("将从头开始训练模型")
     
     print(f'\n---------- training start at: {device} ----------\n')
     print(f"损失函数: {loss_function_type}")
     print(f"优化器: {optimizer_type}")
-    print(f"学习率调度器: {scheduler_type}，每{configs.get('lr-scheduler-step-size', 10)}个epoch降低为原来的{configs.get('lr-scheduler-gamma', 0.5)}倍")
+    print(f"学习率调度器: {scheduler_type}")
     print(f"早停机制配置: 连续{early_stopping_patience}个epoch无提升则停止训练")
+    if use_l1_regularization and l1_lambda > 0:
+        print(f"使用L1正则化，系数: {l1_lambda}")
+    if use_grad_clip:
+        print(f"使用梯度裁剪，阈值: {grad_clip_value}")
+    if use_layer_norm:
+        print(f"使用LayerNorm层")
     
     # 训练循环
     for epoch in range(configs['num-epochs']):
@@ -162,8 +199,19 @@ def main():
             
             optimizer.zero_grad()
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            
+            # 根据是否使用L1正则化选择不同的损失计算方式
+            if use_l1_regularization:
+                loss = criterion(outputs, labels)
+            else:
+                loss = criterion(outputs, labels)
+            
             loss.backward()
+            
+            # 可选的梯度裁剪
+            if use_grad_clip:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_value)
+            
             optimizer.step()
             
             # 累加损失值
