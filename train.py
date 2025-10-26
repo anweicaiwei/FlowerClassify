@@ -10,7 +10,7 @@ from data_preparation import FlowerDataset
 from models import FlowerNet
 from utils.optim_utils import get_loss_function, get_optimizer, get_lr_scheduler
 from utils.plot_utils import PlotManager
-from utils.logging_utils import TrainingLogger  # 导入日志记录器
+from utils.logging_utils import TrainingLogger, TrainingProcessLogger  # 导入日志记录器
 
 
 def main():
@@ -22,6 +22,12 @@ def main():
     # 初始化日志记录器
     logger = TrainingLogger()
     timestamp = logger.get_timestamp()  # 获取时间戳用于checkpoint和日志
+    
+    # 初始化训练过程记录器，使用与参数记录器相同的时间戳
+    process_logger = TrainingProcessLogger(timestamp=timestamp)
+    
+    # 确保 training_logs 目录存在（虽然 TrainingLogger 初始化时已经会创建，但这里再次确认以增加健壮性）
+    os.makedirs('training_logs', exist_ok=True)
     
     # 创建训练集和验证集的变换
     train_transform = transforms.Compose([
@@ -156,9 +162,11 @@ def main():
                 strict=False
             )
             print(f"成功加载检查点（非严格模式）: {load_checkpoint_path}")
+            process_logger.log_training_event("checkpoint_loaded", f"成功加载检查点: {load_checkpoint_path}")
         except Exception as e:
             print(f"加载检查点失败: {e}")
             print("将从头开始训练模型")
+            process_logger.log_training_event("checkpoint_load_failed", f"加载检查点失败: {str(e)}")
     
     # 记录训练信息到日志
     logger.load_config(config_path)
@@ -193,6 +201,8 @@ def main():
     if use_layer_norm:
         print(f"使用LayerNorm层")
     
+    process_logger.log_training_event("training_start", f"训练开始于设备: {device}")
+    
     # 训练循环
     for epoch in range(configs['num-epochs']):
         model.train()
@@ -214,8 +224,10 @@ def main():
             optimizer.step()
             epoch_loss += loss.item()
             
+            # 记录训练批次信息
             if batch % log_interval == 0:
                 print(f'[train] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(train_dataloader):04d}] loss: {loss.item():.5f}')
+                process_logger.log_training_batch(epoch, batch, len(train_dataloader), loss.item())
         
         # 计算当前epoch的平均损失
         avg_epoch_loss = epoch_loss / len(train_dataloader)
@@ -230,8 +242,10 @@ def main():
                 outputs = model(images)
                 accuracy += (torch.argmax(outputs, dim=1) == labels).sum().item()
                 
+                # 记录验证批次信息
                 if batch % log_interval == 0:
                     print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(valid_dataloader):04d}]')
+                    process_logger.log_validation_batch(epoch, batch, len(valid_dataloader))
             
             accuracy /= valid_dataset_size
             
@@ -240,17 +254,23 @@ def main():
                 best_accuracy = accuracy
                 torch.save(model.state_dict(), best_checkpoint_path)
                 print(f"新的最佳模型已保存: {best_checkpoint_path}")
+                process_logger.log_model_saving(epoch, best_checkpoint_path, is_best=True)
                 early_stopping_counter = 0
             else:
                 early_stopping_counter += 1
                 print(f"早停计数器: {early_stopping_counter}/{early_stopping_patience}")
+                process_logger.log_training_event("early_stopping", f"早停计数器: {early_stopping_counter}/{early_stopping_patience}")
             
             # 保存最新模型
             last_accuracy = accuracy
             torch.save(model.state_dict(), last_checkpoint_path)
+            process_logger.log_model_saving(epoch, last_checkpoint_path, is_best=False)
         
         print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {accuracy:.4f}')
         print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.8f}')
+        
+        # 记录epoch结束信息
+        process_logger.log_epoch_end(epoch, avg_epoch_loss, accuracy, optimizer.param_groups[0]["lr"], best_accuracy)
         
         # 更新绘图
         if plot_manager:
@@ -262,6 +282,7 @@ def main():
         # 检查早停条件
         if early_stopping_counter >= early_stopping_patience:
             print(f"早停机制触发：连续{early_stopping_patience}个epoch无性能提升")
+            process_logger.log_training_event("early_stopping_triggered", f"早停机制触发：连续{early_stopping_patience}个epoch无性能提升")
             break
     
     print(f'best accuracy: {best_accuracy:.3f}')
@@ -275,13 +296,14 @@ def main():
         "total_epochs": configs['num-epochs']
     })
     final_log_path = logger.save_log("final")
-    
+
     # 保存绘图结果
     if plot_manager:
         plot_manager.save_plot()
         plot_manager.close()
     
     print('\n---------- training finished ----------\n')
+    process_logger.log_training_event("training_finished", "训练完成")
 
 
 if __name__ == '__main__':
