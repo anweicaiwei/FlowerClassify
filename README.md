@@ -1,18 +1,18 @@
 # FlowerClassify 花卉分类识别系统
+<i><u>v2.0.0 新变化 
 
-*<u>v1.4.0 新变化：调整数据增强重新训练模型。</u>*
+进行数据增强，包括随机水平翻转、随机垂直翻转、随机旋转、随机缩放、随机裁剪、颜色抖动等
+
+模型结构优化，增加LayerNorm层、全局平均池化和扁平化、双 Dropout 层、两层全连接分类层
+
+增加多种损失函数、优化器、学习率调度器等，以提高模型的训练效率和泛化能力，增加梯度裁剪 </u></i>
 
 ## 项目简介
 
-本项目为一个基于 ResNet 的花卉分类识别系统，能有效区分多种不同类别的花卉（从数据集来看支持至少232种花卉），采用 ResNet 系列模型作为主干网络，包含模型的训练、测试以及线上部署（提供容器化部署）。
+本项目为一个基于 ResNet 的花卉分类识别系统，能有效区分多种不同类别的花卉，采用 ResNet 系列模型作为主干网络，包含模型的训练、测试。
 
 - 基于 [PyTorch](https://pytorch.org/) 框架进行模型的训练及测试。
-- 模型采用 [ONNX](https://onnx.org.cn/onnx/index.html) 格式部署，采用 [ONNX Runtime](https://onnxruntime.ai/) 进行推理。
-- 基于 [Flask](https://flask.palletsprojects.com/en/stable/) 框架实现 Web 接口。
-- 使用 [Docker](https://www.docker.com/) 进行容器化部署。
 - 支持单GPU训练和分布式训练两种模式。
-
-训练数据集来自 [Kaggle](https://www.kaggle.com/)，融合了多个数据集并进行了数据清洗，基于预训练模型进行训练。
 
 ## 系统架构
 
@@ -37,13 +37,6 @@
 - 包含图像读取和异常处理机制
 - 支持图像变换和数据增强
 - 数据集按类别分割为 train/valid/test 三部分
-
-### Web 服务
-
-基于 Flask 实现的 Web 服务提供花卉识别接口：
-- 使用 ONNX Runtime 进行模型推理
-- 支持图像上传和预处理
-- 提供 JSON 格式的识别结果（类别索引和置信度）
 
 ## 使用说明
 
@@ -74,26 +67,39 @@ python train.py
 
 训练配置文件为 `configs/config_OneGPU.toml`，主要配置项包括：
 
-| 字段名 | 字段描述 |
-| :--------------------: | :---------------------------------------------------------------------------------------: |
-| device | 设备名称，与 PyTorch 的设备名称保持一致。 |
-| num-epochs | 训练迭代次数。 |
-| num-workers | 训练及评估数据加载进程数。 |
-| batch-size | 训练数据批大小。 |
-| learning-rate | 模型训练学习率。 |
-| weight-decay | 模型训练权重衰减。 |
-| num-classes | 模型输出类别数。 |
-| log-interval | 日志输出频率。 |
-| load-pretrained | 是否使用预训练参数初始化模型权重。 |
-| model-name | 使用的 ResNet 模型名称（resnet18/resnet34/resnet50）。 |
-| use-layer-norm | 是否使用 LayerNorm 层。 |
-| loss-function | 损失函数类型（默认为 cross_entropy）。 |
-| optimizer-type | 优化器类型（默认为 adam）。 |
-| lr-scheduler-type | 学习率调度器类型（默认为 step）。 |
-| load-checkpoint | 是否加载 checkpoint 继续训练。 |
-| load-checkpoint-path | 训练初始模型的加载路径。 |
-| best-checkpoint-path | 训练中当前验证集最优模型保存路径。 |
-| last-checkpoint-path | 训练中最后一次训练模型保存路径。 |
+|           字段名           |                     字段描述                     |
+|:-----------------------:|:--------------------------------------------:|
+|         device          |          设备名称，与 PyTorch 的设备名称保持一致。           |
+|        data-root        |                   原始数据集路径                    |
+|       data-label        |                    标签文件路径                    |
+|    valid-split-ratio    |                   验证集划分比例                    |
+|    test-split-ratio     |                   测试集划分比例                    |
+|       num-epochs        |                   训练迭代次数。                    |
+|       num-workers       |                训练及评估数据加载进程数。                 |
+|       batch-size        |                   训练数据批大小。                   |
+|      learning-rate      |                   模型训练学习率。                   |
+|      weight-decay       |                  模型训练权重衰减。                   |
+|       num-classes       |                   模型输出类别数。                   |
+|      log-interval       |                   日志输出频率。                    |
+|     load-pretrained     |              是否使用预训练参数初始化模型权重。               |
+|       model-name        | 使用的 ResNet 模型名称（resnet18/resnet34/resnet50）。 |
+|     use-layer-norm      |              是否使用 LayerNorm 层。               |
+|      loss-function      |  损失函数类型（默认为 l1_regularized_cross_entropy）。   |
+|     optimizer-type      |               优化器类型（默认为 adam）。               |
+|    lr-scheduler-type    |            学习率调度器类型（默认为 cosine）。             |
+| lr-scheduler-step-size  |                  学习率调度器步长。                   |
+|   lr-scheduler-gamma    |                  学习率调度器衰减率。                  |
+| early-stopping-patience |                   早停机制耐心值。                   |
+|        l1-lambda        |                   L1正则化系数。                   |
+|      use-grad-clip      |                  是否使用梯度裁剪。                   |
+|     grad-clip-value     |                   梯度裁剪阈值。                    |
+|     load-checkpoint     |            是否加载 checkpoint 继续训练。             |
+|  load-checkpoint-path   |                 训练初始模型的加载路径。                 |
+|  checkpoint-timestamp   |                  检查点时间戳目录。                   |
+|     checkpoint-type     |          检查点类型（可选值为"best"或"last"）。           |
+| custom-checkpoint-path  |                  自定义检查点路径。                   |
+|  best-checkpoint-path   |              训练中当前验证集最优模型保存路径。               |
+|  last-checkpoint-path   |               训练中最后一次训练模型保存路径。               |
 
 #### 分布式训练
 
@@ -115,42 +121,6 @@ python eval.py
 
 评估脚本会加载测试集并计算模型在测试集上的准确率。
 
-### 启动 Web 服务
-
-本项目 Web 服务的配置文件为 `servers/configs/config.toml`，其中各个字段描述如下：
-
-| 字段名        | 字段描述                                      |
-|:----------:|:-----------------------------------------:|
-| precision  | 模型推理精度，取值为 "fp32" (单精度) 和 "fp16" (半精度) 。  |
-| providers  | 模型推理 ONNX Runtime Execution Providers 列表。 |
-| model-path | 模型加载路径。                                   |
-
-从本项目 Release 中下载 [ONNX](https://onnx.org.cn/onnx/index.html) 格式的模型权重文件放入 `servers/models` 目录后，执行以下命令启动 Web 服务：
-
-```shell-session
-flask --app servers.server run --host="0.0.0.0" --port=9500
-```
-
-### API 使用说明
-
-Web 服务提供 `/flowerclassify` POST 接口用于花卉识别：
-
-- 请求方式：POST
-- 请求参数：表单数据，包含名为 'image' 的图像文件
-- 返回格式：JSON，包含识别结果（类别索引和置信度）
-
-示例响应：
-```json
-{
-  "index": 164,
-  "score": 0.987
-}
-```
-
-### 构建镜像
-
-模型部署前需要转换为 [ONNX](https://onnx.org.cn/onnx/index.html) 格式放入 `servers/models` 目录中。构建镜像使用的 Dockerfile 位于 `docker` 目录中，请参考 [Docker 官方文档](https://docs.docker.com/) 进行镜像的构建和容器的运行。
-
 ## 支持的花卉种类
 
 根据数据集 `test_split.csv` 显示，系统支持识别多种花卉，包括但不限于：
@@ -162,6 +132,19 @@ Web 服务提供 `/flowerclassify` POST 接口用于花卉识别：
 - 白花雪果
 - 吊兰
 - ...等多种花卉
+
+### 数据集格式
+```csv
+filename,category_id,chinese_name,english_name
+img_000051.jpg,164,紫叶竹节秋海棠（紫竹梅）,Tradescantia pallida
+img_000052.jpg,164,紫叶竹节秋海棠（紫竹梅）,Tradescantia pallida
+img_000053.jpg,164,紫叶竹节秋海棠（紫竹梅）,Tradescantia pallida
+img_000054.jpg,164,紫叶竹节秋海棠（紫竹梅）,Tradescantia pallida
+img_000055.jpg,164,紫叶竹节秋海棠（紫竹梅）,Tradescantia pallida
+img_000056.jpg,164,紫叶竹节秋海棠（紫竹梅）,Tradescantia pallida
+...
+```
+
 
 ## 项目结构
 
