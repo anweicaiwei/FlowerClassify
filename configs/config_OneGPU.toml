@@ -14,12 +14,6 @@ data-label = "datasets/data/data_labels.csv"
 valid-split-ratio = 0.15
 test-split-ratio = 0.15
 
-# 测试集配置
-# 测试集CSV文件路径
-test-csv-file = "datasets/test_split.csv"
-# 测试集图像目录路径
-test-img-dir = "datasets/test"
-
 # 模型名称：指定要使用的模型架构
 # 可选值："resnet18", "resnet34", "resnet50"
 model-name = "resnet34"
@@ -56,7 +50,7 @@ load-checkpoint-path = "checkpoints/best-ckpt.pt"
 
 # 检查点时间戳目录：用于评估的特定时间戳训练目录
 # 例如："20251023_154606"，留空则使用默认路径
-checkpoint-timestamp = "20251025_071825"
+checkpoint-timestamp = ""
 
 # 检查点类型：指定要加载的检查点类型，可选值为"best"或"last"
 checkpoint-type = "best"
