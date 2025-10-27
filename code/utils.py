@@ -2,7 +2,7 @@ import os  # 导入os用于路径处理
 
 import numpy as np
 import pandas as pd  # 导入pandas用于读取CSV
-import toml
+import json  # 替换toml为json
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -11,7 +11,8 @@ from torchvision.io import read_image  # 导入读取图像的函数
 
 # 加载配置
 try:
-    configs = toml.load('model/config.toml')
+    with open('model/config.json', 'r') as f:
+        configs = json.load(f)
 except Exception as e:
     print(f"警告：无法加载配置文件，某些功能可能受限: {e}")
     configs = {}

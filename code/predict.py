@@ -3,7 +3,7 @@ import sys
 import argparse  # 添加命令行参数解析模块
 
 import pandas as pd
-import toml
+import json  # 替换toml为json
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
@@ -21,7 +21,8 @@ def main():
     args = parser.parse_args()
 
     # 加载配置 - 仍然需要配置文件中的其他参数
-    configs = toml.load('model/config.toml')
+    with open('model/config.json', 'r') as f:
+        configs = json.load(f)
 
     # 直接使用命令行参数，不再从配置文件读取或覆盖
     test_img_dir = args.test_folder

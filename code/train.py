@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-import toml
+import json  # 将toml替换为json
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
@@ -12,10 +12,11 @@ from utils import get_loss_function, get_optimizer, get_lr_scheduler, get_train_
 
 def main():
     """主函数，执行模型训练"""
-    # 加载配置
-    config_path = '../model/config.toml'
-    configs = toml.load(config_path)
-    
+    # 加载配置 - 改为使用JSON格式
+    config_path = 'model/config.json'  # 更新路径指向JSON文件
+    with open(config_path, 'r') as f:
+        configs = json.load(f)
+        
     # 创建训练集和验证集的变换
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
