@@ -8,7 +8,7 @@ import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-from models import FlowerNet
+from model import FlowerNet
 from utils import get_test_dataset  # 使用我们自定义的数据集类
 
 

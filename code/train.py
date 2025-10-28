@@ -6,7 +6,7 @@ import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-from models import FlowerNet
+from model import FlowerNet
 from utils import get_loss_function, get_optimizer, get_lr_scheduler, get_train_valid_datasets
 
 
