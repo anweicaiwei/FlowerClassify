@@ -12,7 +12,7 @@ from utils import get_loss_function, get_optimizer, get_lr_scheduler, get_train_
 def main():
     """主函数，执行模型训练"""
     configs = {
-        'device': 'cuda',
+        # 'device': 'cuda',
         'data-root': 'D:/ProjectDevelop/PyCharm/FlowerClassify/datasets/data/train',
         'data-label': 'D:/ProjectDevelop/PyCharm/FlowerClassify/datasets/data_labels.csv',
         'train-ratio': 0.8,
@@ -93,7 +93,7 @@ def main():
     last_accuracy = 0.0
     
     # 设置设备
-    device = torch.device(configs['device'])
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # 初始化模型
     use_layer_norm = configs['use-layer-norm']
@@ -237,7 +237,16 @@ def main():
             # 保存最新模型
             last_accuracy = accuracy
             torch.save(model.state_dict(), last_checkpoint_path)
-        
+
+        # 保存类别映射文件（在第一个epoch结束后保存一次即可）
+        if epoch == 0:
+            category_map_path = os.path.join(checkpoints_dir, 'category_mapping.json')
+            import json
+            category_mapping = {int(k): v for k, v in train_dataset.category_to_idx.items()}
+            with open(category_map_path, 'w') as f:
+                json.dump(category_mapping, f)
+            print(f"类别映射已保存至: {category_map_path}")
+
         print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {accuracy:.4f}')
         print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.8f}')
         
