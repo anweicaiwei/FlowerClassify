@@ -2,20 +2,12 @@ import os  # 导入os用于路径处理
 
 import numpy as np
 import pandas as pd  # 导入pandas用于读取CSV
-import json  # 替换toml为json
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, Subset
 from torchvision.io import read_image  # 导入读取图像的函数
 
-# 加载配置
-try:
-    with open('model/config.json', 'r') as f:
-        configs = json.load(f)
-except Exception as e:
-    print(f"警告：无法加载配置文件，某些功能可能受限: {e}")
-    configs = {}
 
 # ===== 数据准备相关功能 =====
 
@@ -103,7 +95,7 @@ class InferenceDataset(Dataset):
             print(f"读取图像文件夹时出错: {e}")
         
         # 类别数量从配置中获取
-        self.num_classes = configs.get('num-classes', 102)  # 假设默认有102个花卉类别
+        self.num_classes = 100 # 假设默认有102个花卉类别
         
         # 创建默认的类别映射（索引到类别ID）
         self.category_to_idx = {i: i for i in range(self.num_classes)}

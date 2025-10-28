@@ -1,7 +1,6 @@
 import os
 from datetime import datetime
 
-import json  # 将toml替换为json
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
@@ -12,11 +11,38 @@ from utils import get_loss_function, get_optimizer, get_lr_scheduler, get_train_
 
 def main():
     """主函数，执行模型训练"""
-    # 加载配置 - 改为使用JSON格式
-    config_path = 'model/config.json'  # 更新路径指向JSON文件
-    with open(config_path, 'r') as f:
-        configs = json.load(f)
-        
+    configs = {
+        'device': 'cuda',
+        'data-root': 'D:/ProjectDevelop/PyCharm/FlowerClassify/datasets/data/train',
+        'data-label': 'D:/ProjectDevelop/PyCharm/FlowerClassify/datasets/data_labels.csv',
+        'train-ratio': 0.8,
+        'valid-split-ratio': 0.2,
+        'random-seed': 42,
+        'custom-model-params-path': 'model/best-model.pt',
+        'custom-output-path': 'results/submission.csv',
+        'model-name': 'resnet34',
+        'batch-size': 64,
+        'num-epochs': 100,
+        'num-workers': 4,
+        'num-classes': 100,
+        'log-interval': 10,
+        'load-checkpoint': False,
+        'load-pretrained': False,
+        'load-checkpoint-path': 'checkpoints/best-ckpt.pt',
+        'loss-function': 'l1_regularized_cross_entropy',
+        'learning-rate': 0.0001,
+        'weight-decay': 0.0005,
+        'optimizer-type': 'adam',
+        'lr-scheduler-type': 'cosine',
+        'lr-scheduler-step-size': 10,
+        'lr-scheduler-gamma': 0.5,
+        'early-stopping-patience': 10,
+        'l1-lambda': 0.000001,
+        'use-layer-norm': True,
+        'use-grad-clip': True,
+        'grad-clip-value': 1.0
+    }
+    
     # 创建训练集和验证集的变换
     train_transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -36,9 +62,9 @@ def main():
     
     # 使用utils.py中的函数直接创建并划分训练集和验证集
     train_dataset, valid_dataset, category_to_idx, num_classes = get_train_valid_datasets(
-        csv_file=configs.get('data-label', 'datasets/all_data.csv'),
-        img_dir=configs.get('data-root', 'datasets/all_images'),
-        valid_ratio=configs.get('valid-split-ratio', 0.2),
+        csv_file=configs['data-label'],
+        img_dir=configs['data-root'],
+        valid_ratio=configs['valid-split-ratio'],
         transform=train_transform  # 为了简单起见，对训练集和验证集使用相同的变换
     )
     
@@ -70,7 +96,7 @@ def main():
     device = torch.device(configs['device'])
     
     # 初始化模型
-    use_layer_norm = configs.get('use-layer-norm', False)
+    use_layer_norm = configs['use-layer-norm']
     model = FlowerNet(
         num_classes=num_classes, 
         pretrained=configs['load-pretrained'], 
@@ -79,19 +105,19 @@ def main():
     )
     model = model.to(device)
     
-    # 从配置文件读取损失函数类型并获取损失函数
-    loss_function_type = configs.get('loss-function', 'cross_entropy')
+    # 获取损失函数
+    loss_function_type = configs['loss-function']
     criterion = get_loss_function(loss_function_type)
     l1_lambda = 0
     
     # 如果是L1正则化损失，设置模型
     if loss_function_type == 'l1_regularized_cross_entropy':
         criterion = criterion.set_model(model)
-        l1_lambda = configs.get('l1-lambda', 0.001)
+        l1_lambda = configs['l1-lambda']
         criterion = criterion.set_l1_lambda(l1_lambda)
     
-    # 从配置文件读取优化器类型并获取优化器
-    optimizer_type = configs.get('optimizer-type', 'adam')
+    # 获取优化器
+    optimizer_type = configs['optimizer-type']
     optimizer = get_optimizer(
         model,
         optimizer_type,
@@ -101,21 +127,21 @@ def main():
     )
     
     # 添加学习率调度器
-    scheduler_type = configs.get('lr-scheduler-type', 'step')
+    scheduler_type = configs['lr-scheduler-type']
     scheduler = get_lr_scheduler(
         optimizer,
         scheduler_type,
-        step_size=configs.get('lr-scheduler-step-size', 10),
-        gamma=configs.get('lr-scheduler-gamma', 0.5)
+        step_size=configs['lr-scheduler-step-size'],
+        gamma=configs['lr-scheduler-gamma']
     )
     
     # 早停机制相关参数
-    early_stopping_patience = configs.get('early-stopping-patience', 15)
+    early_stopping_patience = configs['early-stopping-patience']
     early_stopping_counter = 0
     
     # 梯度裁剪参数
-    use_grad_clip = configs.get('use-grad-clip', False)
-    grad_clip_value = configs.get('grad-clip-value', 1.0)
+    use_grad_clip = configs['use-grad-clip']
+    grad_clip_value = configs['grad-clip-value']
     
     # 创建基于时间戳的checkpoint目录
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -123,7 +149,7 @@ def main():
     os.makedirs(checkpoints_dir, exist_ok=True)
     print(f"检查点将保存至目录: {checkpoints_dir}")
     
-    # 使用配置中的文件名，但保存路径改为基于时间戳的目录
+    # 设置检查点路径
     load_checkpoint_path = configs['load-checkpoint-path']
     best_checkpoint_path = os.path.join(checkpoints_dir, 'best-model.pt')
     last_checkpoint_path = os.path.join(checkpoints_dir, 'last-ckpt.pt')
