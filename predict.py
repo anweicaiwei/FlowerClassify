@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 import pandas as pd
 import toml
@@ -98,11 +99,23 @@ def main():
 
     print(f"正在加载模型参数: {model_params_path}")
 
-    # 创建一个反向映射：从索引映射回原始类别ID
-    idx_to_category = {v: k for k, v in test_dataset.category_to_idx.items()}
+    # 尝试从与模型参数相同的目录加载类别映射文件
+    category_map_path = os.path.join(os.path.dirname(model_params_path), 'category_mapping.json')
+    if os.path.exists(category_map_path):
+        with open(category_map_path, 'r') as f:
+            category_to_idx = json.load(f)
+        print(f"成功加载类别映射文件: {category_map_path}")
+        idx_to_category = {int(v): k for k, v in category_to_idx.items()}
+    else:
+        # 如果没有找到类别映射文件，则使用数据集的映射
+        print(f"警告：未找到类别映射文件，将使用数据集的映射: {category_map_path}")
+        # 创建一个反向映射：从索引映射回原始类别ID
+        idx_to_category = {v: k for k, v in test_dataset.category_to_idx.items()}
 
     # 用于存储预测结果
     predictions = []
+    true_labels = []
+    predicted_labels = []
 
     with torch.no_grad():
         top1_accuracy = 0.0
@@ -143,17 +156,22 @@ def main():
                 # 获取原始图像文件名
                 img_idx = batch_start + i
                 img_name = test_dataset.data_frame.iloc[img_idx, 0]
+                
+                # 获取真实标签
+                true_category_id = test_dataset.data_frame.iloc[img_idx, 1]
+                true_labels.append(true_category_id)
 
                 # 获取预测类别和置信度
                 predicted_idx = top1_indices[i].item()
                 predicted_category = idx_to_category[predicted_idx]
+                predicted_labels.append(predicted_category)
 
                 # 计算置信度（使用softmax）
                 probabilities = torch.nn.functional.softmax(outputs[i], dim=0)
                 confidence = probabilities[predicted_idx].item()
 
                 # 添加到预测列表
-                predictions.append([img_name, predicted_category, confidence])
+                predictions.append([img_name, predicted_category, confidence, true_category_id])
 
             if batch % log_interval == 0:
                 print(f'[predict] [{batch:04d}/{dataloader_size:04d}]')
@@ -189,10 +207,31 @@ def main():
         output_file = os.path.join(output_dir, 'predictions.csv')
 
     # 创建DataFrame并保存
-    df = pd.DataFrame(predictions, columns=['filename', 'category_id', 'confidence'])
+    df = pd.DataFrame(predictions, columns=['filename', 'predicted_category_id', 'confidence', 'true_category_id'])
     # 保存时不包含索引列，但包含列名
     df.to_csv(output_file, index=False)
     print(f'预测结果已保存到: {output_file}')
+    
+    # 额外进行预测结果与测试标签的比对，计算准确率
+    print('\n--- 预测结果与测试标签比对分析 ---')
+    
+    # 1. 从保存的预测结果和原始测试标签CSV重新计算准确率
+    # 读取保存的预测结果
+    pred_df = pd.read_csv(output_file)
+    
+    # 读取原始测试标签
+    test_df = pd.read_csv(test_csv_file)
+    
+    # 合并预测结果和测试标签（确保顺序一致）
+    merged_df = pd.merge(test_df, pred_df, on='filename', how='inner')
+    
+    # 计算准确率
+    correct_predictions = (merged_df['category_id'] == merged_df['predicted_category_id']).sum()
+    total_predictions = len(merged_df)
+    comparison_accuracy = correct_predictions / total_predictions if total_predictions > 0 else 0
+    
+    print(f"比对准确率: {comparison_accuracy:.3f} ({correct_predictions}/{total_predictions})")
+    print('--------------------------------------\n')
     print('---------- prediction finished ----------\n')
 
 

@@ -22,7 +22,7 @@ test-img-dir = "datasets/test"
 # 自定义模型参数路径：直接指定完整的模型参数文件路径
 custom-model-params-path = "checkpoints/OneGPU/20251025_071825/best-ckpt.pt"
 # 自定义输出路径：指定评估结果保存的目录
-custom-output-path = "checkpoints/OneGPU/20251025_071825"
+custom-output-path = "checkpoints/OneGPU/20251025_071825/predictions.csv"
 
 
 # 模型名称：指定要使用的模型架构
@@ -36,7 +36,7 @@ batch-size = 64  # 根据GPU内存情况可适当调整
 num-epochs = 100
 
 # 数据加载线程数：用于并行加载数据的线程数量，可根据CPU核心数调整
-num-workers = 4
+num-workers = 20
 
 # 类别数量：花卉分类任务中的类别总数
 num-classes = 0
