@@ -8,39 +8,130 @@ from torch.utils.data import DataLoader
 from model import FlowerNet
 from utils import get_loss_function, get_optimizer, get_lr_scheduler, get_train_valid_datasets
 
+# 添加Mixup数据增强
+class MixupDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, alpha=0.8):
+        self.dataset = dataset
+        self.alpha = alpha
+        self.num_classes = dataset.num_classes
+        
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, index):
+        img1, label1 = self.dataset[index]
+        # 随机选择第二个样本
+        index2 = torch.randint(0, len(self.dataset), (1,)).item()
+        img2, label2 = self.dataset[index2]
+        
+        # 生成mixup系数
+        if self.alpha > 0:
+            lam = torch.distributions.Beta(self.alpha, self.alpha).sample().item()
+        else:
+            lam = 1.0
+        
+        # mixup图像和标签
+        mixed_img = lam * img1 + (1 - lam) * img2
+        
+        # 返回混合后的图像和原始标签
+        return mixed_img, label1, label2, lam
+
+# 渐进式训练类
+class ProgressiveTraining:
+    def __init__(self, model, configs):
+        self.model = model
+        self.configs = configs
+        self.current_stage = 0
+        self.stage_epochs = configs.get('stage_epochs', [10, 15, 20])  # 分阶段训练的轮数
+        self.freeze_layers = configs.get('freeze_layers', True)  # 是否冻结低层
+    
+    def update_stage(self, epoch):
+        # 计算当前阶段
+        total_epochs = 0
+        for i, stage_epoch in enumerate(self.stage_epochs):
+            total_epochs += stage_epoch
+            if epoch < total_epochs:
+                new_stage = i
+                break
+        else:
+            new_stage = len(self.stage_epochs) - 1
+        
+        # 如果进入新阶段，更新模型训练策略
+        if new_stage != self.current_stage:
+            self.current_stage = new_stage
+            self._update_model_training_status()
+            print(f"进入训练阶段 {new_stage+1}/{len(self.stage_epochs)}")
+    
+    def _update_model_training_status(self):
+        # 根据不同阶段解冻不同数量的层
+        if not self.freeze_layers:
+            return
+        
+        # 渐进式解冻模型层
+        if self.current_stage == 0:
+            # 第一阶段：只训练分类头
+            for param in self.model.conv1.parameters():
+                param.requires_grad = False
+            for param in self.model.layer1.parameters():
+                param.requires_grad = False
+            for param in self.model.layer2.parameters():
+                param.requires_grad = False
+            for param in self.model.layer3.parameters():
+                param.requires_grad = False
+            # 只训练layer4和分类头
+        elif self.current_stage == 1:
+            # 第二阶段：训练layer3、layer4和分类头
+            for param in self.model.conv1.parameters():
+                param.requires_grad = False
+            for param in self.model.layer1.parameters():
+                param.requires_grad = False
+            for param in self.model.layer2.parameters():
+                param.requires_grad = False
+        else:
+            # 第三阶段：训练所有层
+            for param in self.model.parameters():
+                param.requires_grad = True
 
 def main():
     """主函数，执行模型训练"""
     configs = {
-        # 'device': 'cuda',
-        'data-root': 'D:/ProjectDevelop/PyCharm/FlowerClassify/datasets/data/train',
-        'data-label': 'D:/ProjectDevelop/PyCharm/FlowerClassify/datasets/data_labels.csv',
-        'train-ratio': 0.8,
-        'valid-split-ratio': 0.2,
-        'random-seed': 42,
-        'custom-model-params-path': 'model/best-model.pt',
-        'custom-output-path': 'results/submission.csv',
-        'model-name': 'resnet34',
-        'batch-size': 64,
-        'num-epochs': 100,
-        'num-workers': 4,
-        'num-classes': 100,
-        'log-interval': 10,
-        'load-checkpoint': False,
-        'load-pretrained': False,
-        'load-checkpoint-path': 'checkpoints/best-ckpt.pt',
-        'loss-function': 'l1_regularized_cross_entropy',
-        'learning-rate': 0.0001,
-        'weight-decay': 0.0005,
-        'optimizer-type': 'adam',
-        'lr-scheduler-type': 'cosine',
-        'lr-scheduler-step-size': 10,
-        'lr-scheduler-gamma': 0.5,
-        'early-stopping-patience': 10,
-        'l1-lambda': 0.000001,
-        'use-layer-norm': True,
-        'use-grad-clip': True,
-        'grad-clip-value': 1.0
+        # "device": "cuda",
+        "data-root": "../data/flowerclassify/train/train",
+        "data-label": "../data/flowerclassify/train_labels.csv",
+        "valid-split-ratio": 0.15,
+        "test-split-ratio": 0.15,
+        "test-csv-file": "datasets/test_split.csv",
+        "test-img-dir": "datasets/test",
+        "custom-model-params-path": "../model/best-model.pt",
+        "custom-output-path": "checkpoints/OneGPU/20251025_071825/predictions.csv",
+        "model-name": "resnet50",
+        "batch-size": 64,
+        "num-epochs": 100,
+        "num-workers": 20,
+        "num-classes": 100,
+        "log-interval": 10,
+        "load-checkpoint": False,
+        "load-pretrained": True,
+        "load-checkpoint-path": "checkpoints/best-ckpt.pt",
+        "loss-function": "label_smoothing_cross_entropy",
+        "learning-rate": 0.00005,
+        "weight-decay": 0.0005,
+        "optimizer-type": "adamw",
+        "lr-scheduler-type": "cosine_warm_restarts",
+        "lr-scheduler-step-size": 10,
+        "lr-scheduler-gamma": 0.5,
+        "warmup_epochs": 5,
+        "warmup_type": "cosine",
+        "early-stopping-patience": 10,
+        "l1-lambda": 0.0000005,
+        "use-layer-norm": True,
+        "use-grad-clip": True,
+        "grad-clip-value": 1.0,
+        "activation-fn": "gelu",
+        "use-mixup": True,
+        "mixup-alpha": 0.8,
+        "stage_epochs": [10, 15, 20],
+        "freeze_layers": True
     }
     
     # 创建训练集和验证集的变换
@@ -67,6 +158,11 @@ def main():
         valid_ratio=configs['valid-split-ratio'],
         transform=train_transform  # 为了简单起见，对训练集和验证集使用相同的变换
     )
+    
+    # 如果启用Mixup数据增强
+    if configs.get('use-mixup', False):
+        train_dataset = MixupDataset(train_dataset, alpha=configs.get('mixup-alpha', 0.8))
+        print(f"使用Mixup数据增强，alpha值: {configs.get('mixup-alpha', 0.8)}")
     
     # 获取数据集大小
     configs['num-classes'] = num_classes
@@ -97,11 +193,14 @@ def main():
     
     # 初始化模型
     use_layer_norm = configs['use-layer-norm']
+    activation_fn = configs.get('activation-fn', 'gelu')
+    
     model = FlowerNet(
         num_classes=num_classes, 
         pretrained=configs['load-pretrained'], 
         model_name=configs['model-name'],
-        use_layer_norm=use_layer_norm
+        use_layer_norm=use_layer_norm,
+        activation_fn=activation_fn
     )
     model = model.to(device)
     
@@ -126,13 +225,21 @@ def main():
         l1_lambda=l1_lambda if l1_lambda > 0 else None
     )
     
+    # 获取预热相关参数
+    warmup_epochs = configs.get('warmup_epochs', 0)
+    warmup_type = configs.get('warmup_type', 'linear')
+    
     # 添加学习率调度器
     scheduler_type = configs['lr-scheduler-type']
     scheduler = get_lr_scheduler(
         optimizer,
         scheduler_type,
         step_size=configs['lr-scheduler-step-size'],
-        gamma=configs['lr-scheduler-gamma']
+        gamma=configs['lr-scheduler-gamma'],
+        T_max=configs.get('num-epochs', 100),  # 余弦退火调度器需要的T_max参数
+        eta_min=configs['learning-rate'] * 0.01,
+        warmup_epochs=warmup_epochs,
+        warmup_type=warmup_type
     )
     
     # 早停机制相关参数
@@ -172,6 +279,8 @@ def main():
     print(f"损失函数: {loss_function_type}")
     print(f"优化器: {optimizer_type}")
     print(f"学习率调度器: {scheduler_type}")
+    if warmup_epochs > 0:
+        print(f"使用学习率预热: {warmup_type}方式，预热轮数: {warmup_epochs}")
     print(f"早停机制配置: 连续{early_stopping_patience}个epoch无提升则停止训练")
     if l1_lambda > 0:
         print(f"使用L1正则化，系数: {l1_lambda}")
@@ -179,19 +288,43 @@ def main():
         print(f"使用梯度裁剪，阈值: {grad_clip_value}")
     if use_layer_norm:
         print(f"使用LayerNorm层")
+    print(f"使用激活函数: {activation_fn}")
+    if configs.get('freeze_layers', False):
+        print(f"使用渐进式训练，阶段划分: {configs.get('stage_epochs', [10, 15, 20])}个epoch")
+    
+    # 初始化渐进式训练
+    progressive_trainer = ProgressiveTraining(model, configs)
     
     # 训练循环
     for epoch in range(configs['num-epochs']):
+        # 更新训练阶段
+        progressive_trainer.update_stage(epoch)
+        
         model.train()
         epoch_loss = 0.0
         
-        for batch, (images, labels) in enumerate(train_dataloader, start=1):
-            images = images.to(device)
-            labels = labels.to(device)
+        for batch, data in enumerate(train_dataloader, start=1):
+            # 处理普通批次和Mixup批次
+            if len(data) == 4:  # Mixup批次有4个元素
+                images, labels1, labels2, lam = data
+                images = images.to(device)
+                labels1 = labels1.to(device)
+                labels2 = labels2.to(device)
+                lam = lam.to(device)
+            else:  # 普通批次有2个元素
+                images, labels = data
+                images = images.to(device)
+                labels = labels.to(device)
             
             optimizer.zero_grad()
             outputs = model(images)
-            loss = criterion(outputs, labels)
+            
+            # 计算损失
+            if len(data) == 4:  # Mixup损失计算
+                loss = lam * criterion(outputs, labels1) + (1 - lam) * criterion(outputs, labels2)
+            else:  # 普通损失计算
+                loss = criterion(outputs, labels)
+            
             loss.backward()
             
             # 可选的梯度裁剪
@@ -207,6 +340,9 @@ def main():
         
         # 计算当前epoch的平均损失
         avg_epoch_loss = epoch_loss / len(train_dataloader)
+        
+        # 更新学习率
+        scheduler.step()
         
         # 验证循环
         model.eval()
@@ -249,9 +385,6 @@ def main():
 
         print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {accuracy:.4f}')
         print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.8f}')
-        
-        # 更新学习率
-        scheduler.step()
         
         # 检查早停条件
         if early_stopping_counter >= early_stopping_patience:

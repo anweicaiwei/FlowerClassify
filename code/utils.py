@@ -1,12 +1,18 @@
 import os  # 导入os用于路径处理
+import random
+import shutil  # 导入shutil用于文件复制
+import math
 
 import numpy as np
 import pandas as pd  # 导入pandas用于读取CSV
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset, Subset
 from torchvision.io import read_image  # 导入读取图像的函数
+from torchvision import transforms
+from PIL import Image
 
 
 # ===== 数据准备相关功能 =====
@@ -49,9 +55,16 @@ class FlowerDataset(Dataset):
         try:
             image = read_image(img_path)
 
-            # 应用变换
+            # 将PIL图像转换为Tensor并应用变换
             if self.transform:
-                image = self.transform(image)
+                # 检查transforms是否为列表
+                if isinstance(self.transform, list):
+                    # 如果是列表，则随机选择一个变换
+                    selected_transform = random.choice(self.transform)
+                    image = selected_transform(image)
+                else:
+                    # 如果不是列表，则直接应用变换
+                    image = self.transform(image)
 
             # 将类别ID映射为索引
             label = self.category_to_idx[category_id]
@@ -84,7 +97,7 @@ class InferenceDataset(Dataset):
         self.image_files = []
         # 支持的图像文件扩展名
         supported_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.gif']
-        
+
         # 遍历文件夹获取图像文件
         try:
             for file in os.listdir(img_dir):
@@ -93,10 +106,10 @@ class InferenceDataset(Dataset):
                     self.image_files.append(file)
         except Exception as e:
             print(f"读取图像文件夹时出错: {e}")
-        
+
         # 类别数量从配置中获取
-        self.num_classes = 100 # 假设默认有102个花卉类别
-        
+        self.num_classes = 100  # 假设默认有102个花卉类别
+
         # 创建默认的类别映射（索引到类别ID）
         self.category_to_idx = {i: i for i in range(self.num_classes)}
 
@@ -108,7 +121,7 @@ class InferenceDataset(Dataset):
     def __getitem__(self, idx):
         # 获取图像文件名
         img_name = self.image_files[idx]
-        
+
         # 构建完整的图像路径
         img_path = os.path.join(self.img_dir, img_name)
 
@@ -132,20 +145,39 @@ class InferenceDataset(Dataset):
 
 # ========== 用于predict.py的测试集相关代码 ==========
 
-def get_test_dataset(test_img_dir, transform=None):
-    """创建无标签测试集数据集（仅在predict.py中使用）
+def get_test_dataset(test_csv_file=None, test_img_dir=None, transform=None):
+    """创建测试集数据集（仅在predict.py中使用）
     Args:
+        test_csv_file (string, optional): 测试集标签CSV文件的路径，可选
         test_img_dir (string): 测试集图像文件夹的路径
         transform (callable, optional): 应用于图像的变换函数
     Returns:
-        Dataset: 无标签测试集数据集对象
+        Dataset: 测试集数据集对象
     """
     # 检查图像目录是否存在
     if not test_img_dir or not os.path.exists(test_img_dir):
         print(f"错误: 测试图像目录不存在或未指定: {test_img_dir}")
         return None
-    
-    # 创建无标签推理数据集
+
+    # 如果提供了CSV文件，则使用传统的FlowerDataset
+    if test_csv_file and os.path.exists(test_csv_file):
+        try:
+            # 创建测试集数据集
+            test_dataset = FlowerDataset(test_csv_file, test_img_dir, transform)
+            print(f"测试集大小: {len(test_dataset)}")
+            print(f"测试集类别数量: {test_dataset.num_classes}")
+            return test_dataset
+        except Exception as e:
+            print(f"使用CSV文件创建测试集时出错: {e}")
+            print("尝试使用无标签推理模式...")
+    else:
+        # 没有提供CSV文件或文件不存在，使用无标签推理模式
+        if test_csv_file:
+            print(f"警告: 测试集标签文件 {test_csv_file} 不存在，使用无标签推理模式")
+        else:
+            print("未提供测试集标签文件，使用无标签推理模式")
+
+    # 使用无标签推理数据集
     try:
         test_dataset = InferenceDataset(test_img_dir, transform)
         print(f"测试集大小: {len(test_dataset)}")
@@ -154,6 +186,28 @@ def get_test_dataset(test_img_dir, transform=None):
     except Exception as e:
         print(f"创建无标签推理数据集时出错: {e}")
         return None
+
+
+def load_custom_test_data(test_csv_file, test_img_dir):
+    """加载自定义测试数据（仅在predict.py中使用）
+    Args:
+        test_csv_file (string): 测试集标签CSV文件的路径
+        test_img_dir (string): 测试集图像文件夹的路径
+    Returns:
+        tuple: (test_df, category_to_idx) 如果文件存在
+        None: 如果文件不存在
+    """
+    if not os.path.exists(test_csv_file):
+        print(f"错误: 测试集标签文件 {test_csv_file} 不存在")
+        return None
+
+    # 读取测试集CSV文件
+    test_df = pd.read_csv(test_csv_file)
+
+    # 创建类别映射
+    category_to_idx = create_category_mapping(test_df)
+
+    return test_df, category_to_idx
 
 
 # 处理训练集和验证集的划分
@@ -249,71 +303,215 @@ def get_train_valid_datasets(csv_file, img_dir, valid_ratio=0.2, transform=None)
     return train_dataset, valid_dataset, category_to_idx, num_classes
 
 
-# ========== 以下是仅在predict.py中使用的测试集相关代码 ==========
+# ===== 数据增强相关功能 =====
 
-def get_test_dataset(test_csv_file=None, test_img_dir=None, transform=None):
-    """创建测试集数据集（仅在predict.py中使用）
-    Args:
-        test_csv_file (string, optional): 测试集标签CSV文件的路径，可选
-        test_img_dir (string): 测试集图像文件夹的路径
-        transform (callable, optional): 应用于图像的变换函数
+def get_augmentations():
+    """创建并返回所有数据增强方法的列表
     Returns:
-        Dataset: 测试集数据集对象
+        list: 包含所有增强方法的列表
     """
-    # 检查图像目录是否存在
-    if not test_img_dir or not os.path.exists(test_img_dir):
-        print(f"错误: 测试图像目录不存在或未指定: {test_img_dir}")
-        return None
-        
-    # 如果提供了CSV文件，则使用传统的FlowerDataset
-    if test_csv_file and os.path.exists(test_csv_file):
-        try:
-            # 创建测试集数据集
-            test_dataset = FlowerDataset(test_csv_file, test_img_dir, transform)
-            print(f"测试集大小: {len(test_dataset)}")
-            print(f"测试集类别数量: {test_dataset.num_classes}")
-            return test_dataset
-        except Exception as e:
-            print(f"使用CSV文件创建测试集时出错: {e}")
-            print("尝试使用无标签推理模式...")
-    else:
-        # 没有提供CSV文件或文件不存在，使用无标签推理模式
-        if test_csv_file:
-            print(f"警告: 测试集标签文件 {test_csv_file} 不存在，使用无标签推理模式")
-        else:
-            print("未提供测试集标签文件，使用无标签推理模式")
-    
-    # 使用无标签推理数据集
+    # 增强方式1：随机水平翻转+颜色抖动
+    aug1 = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=1.0),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.Resize((600, 600)),  # 输出尺寸为600x600
+    ])
+    # 增强方式2：随机旋转+放大
+    aug2 = transforms.Compose([
+        transforms.RandomRotation(degrees=(-10, 10)),
+        transforms.Resize((600, 600)),
+        # # 直接放大到目标尺寸的1.3倍
+        # transforms.Resize((int(600*1.3), int(600*1.3))),
+        transforms.CenterCrop((600, 600)),  # 裁剪中心600x600，去除黑边
+    ])
+    # 增强方式3：亮度调整+高斯模糊
+    aug3 = transforms.Compose([
+        transforms.ColorJitter(brightness=(0.7, 1.3)),
+        transforms.GaussianBlur(kernel_size=3),
+        transforms.Resize((600, 600)),
+    ])
+    # 增强方式4：垂直翻转+饱和度调整
+    aug4 = transforms.Compose([
+        transforms.RandomVerticalFlip(p=1.0),
+        transforms.ColorJitter(saturation=(0.7, 1.3)),
+        transforms.Resize((600, 600)),
+    ])
+    # 增强方式5：随机灰度+对比度调整
+    aug5 = transforms.Compose([
+        transforms.RandomGrayscale(p=1.0),
+        transforms.ColorJitter(contrast=(0.7, 1.3)),
+        transforms.Resize((600, 600)),
+    ])
+
+    # 返回所有增强方法的列表
+    return [aug1, aug2, aug3, aug4, aug5]
+
+
+def apply_all_augmentations(image_path, save_path, augmentations):
+    """应用所有数据增强方法并保存图像
+    Args:
+        image_path (str): 原始图像路径
+        save_path (str): 保存增强图像的路径
+        augmentations (list): 所有增强方法的列表
+    Returns:
+        list: 包含所有生成的增强图像文件名的列表
+    """
+    generated_files = []
     try:
-        test_dataset = InferenceDataset(test_img_dir, transform)
-        print(f"测试集大小: {len(test_dataset)}")
-        print(f"使用的类别数量: {test_dataset.num_classes}")
-        return test_dataset
+        # 使用PIL打开图像
+        image = Image.open(image_path).convert('RGB')
+
+        # 保存原始图像
+        base_name, ext = os.path.splitext(save_path)
+        image.save(save_path)
+        generated_files.append(os.path.basename(save_path))
+
+        # 应用每一种数据增强方法并保存
+        for i, augmentation in enumerate(augmentations):
+            augmented_image = augmentation(image)
+            # 保存增强图像，添加增强标记
+            augmented_save_path = os.path.join(os.path.dirname(save_path), f"{os.path.basename(base_name)}_aug{i}{ext}")
+            augmented_image.save(augmented_save_path)
+            generated_files.append(os.path.basename(augmented_save_path))
+
+        return generated_files
     except Exception as e:
-        print(f"创建无标签推理数据集时出错: {e}")
-        return None
+        print(f"处理图像时出错 {image_path}: {e}")
+        return []
 
 
-def load_custom_test_data(test_csv_file, test_img_dir):
-    """加载自定义测试数据（仅在predict.py中使用）
+def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
+    """准备训练集、验证集和测试集
     Args:
-        test_csv_file (string): 测试集标签CSV文件的路径
-        test_img_dir (string): 测试集图像文件夹的路径
-    Returns:
-        tuple: (test_df, category_to_idx) 如果文件存在
-        None: 如果文件不存在
+        csv_file (string): 原始标签CSV文件的路径
+        img_dir (string): 原始图像文件夹的路径
+        valid_ratio (float): 验证集占总数据集的比例
+        test_ratio (float): 测试集占总数据集的比例
     """
-    if not os.path.exists(test_csv_file):
-        print(f"错误: 测试集标签文件 {test_csv_file} 不存在")
-        return None
+    # 获取所有增强方法
+    augmentations = get_augmentations()
 
-    # 读取测试集CSV文件
-    test_df = pd.read_csv(test_csv_file)
+    # 读取原始CSV文件
+    df = pd.read_csv(csv_file)
 
     # 创建类别映射
-    category_to_idx = create_category_mapping(test_df)
+    category_to_idx = create_category_mapping(df)
+    num_classes = len(category_to_idx)
 
-    return test_df, category_to_idx
+    # 创建保存训练集、验证集和测试集的目录
+    train_img_dir = os.path.join('datasets', 'train')
+    valid_img_dir = os.path.join('datasets', 'valid')
+    test_img_dir = os.path.join('datasets', 'test')
+
+    # 清空已有的目录（如果存在）
+    for dir_path in [train_img_dir, valid_img_dir, test_img_dir]:
+        if os.path.exists(dir_path):
+            # 获取目录中的所有文件
+            files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
+            if files:
+                print(f"清空目录: {dir_path}")
+                # 直接遍历文件
+                for file_name in files:
+                    file_path = os.path.join(dir_path, file_name)
+                    os.remove(file_path)
+        # 确保目录存在
+        os.makedirs(dir_path, exist_ok=True)
+
+    # 按类别分割数据集，确保每个类别的数据都能被合理分割
+    train_data = []
+    valid_data = []
+    test_data = []
+
+    # 按类别ID分组
+    grouped = df.groupby('category_id')
+
+    # 分割数据，但不立即复制文件
+    for category_id, group in grouped:
+        # 对每个类别的数据进行打乱
+        group = group.sample(frac=1, random_state=42).reset_index(drop=True)
+
+        # 计算验证集和测试集大小
+        valid_size = int(len(group) * valid_ratio)
+        test_size = int(len(group) * test_ratio)
+
+        # 分割数据
+        valid_group = group.iloc[:valid_size].copy()
+        test_group = group.iloc[valid_size:valid_size + test_size].copy()
+        train_group = group.iloc[valid_size + test_size:].copy()
+
+        # 添加到训练集、验证集和测试集列表
+        train_data.append(train_group)
+        valid_data.append(valid_group)
+        test_data.append(test_group)
+
+    # 合并所有类别的数据
+    train_df = pd.concat(train_data, ignore_index=True)
+    valid_df = pd.concat(valid_data, ignore_index=True)
+    test_df = pd.concat(test_data, ignore_index=True)
+
+    # 统计需要处理的总文件数
+    total_files = len(train_df) + len(valid_df) + len(test_df)
+    print(f"开始处理数据集，总计 {total_files} 个文件...")
+
+    # 复制训练集图像并应用增强
+    print("\n复制训练集图像并应用所有数据增强方法...")
+    train_data_augmented = []
+
+    # 直接遍历训练集数据
+    for _, row in train_df.iterrows():
+        src_path = os.path.join(img_dir, row['filename'])
+        dst_path = os.path.join(train_img_dir, row['filename'])
+
+        # 应用所有增强方法并保存图像
+        generated_files = apply_all_augmentations(src_path, dst_path, augmentations)
+
+        if generated_files:
+            # 添加所有生成的图像到增强数据集
+            for file_name in generated_files:
+                augmented_row = row.copy()
+                augmented_row['filename'] = file_name
+                train_data_augmented.append(augmented_row)
+
+    # 创建增强后的训练数据集DataFrame
+    train_augmented_df = pd.DataFrame(train_data_augmented)
+
+    # 复制验证集图像
+    print("\n复制验证集图像...")
+    for _, row in valid_df.iterrows():
+        src_path = os.path.join(img_dir, row['filename'])
+        dst_path = os.path.join(valid_img_dir, row['filename'])
+        # 直接复制文件，覆盖已存在的文件
+        shutil.copy2(src_path, dst_path)
+
+    # 复制测试集图像
+    print("\n复制测试集图像...")
+    for _, row in test_df.iterrows():
+        src_path = os.path.join(img_dir, row['filename'])
+        dst_path = os.path.join(test_img_dir, row['filename'])
+        # 直接复制文件，覆盖已存在的文件
+        shutil.copy2(src_path, dst_path)
+
+    # 保存新的CSV文件
+    print("\n正在保存CSV文件...")
+    train_csv_path = os.path.join('datasets', 'train_split.csv')
+    valid_csv_path = os.path.join('datasets', 'valid_split.csv')
+    test_csv_path = os.path.join('datasets', 'test_split.csv')
+
+    train_augmented_df.to_csv(train_csv_path, index=False)  # 保存增强后的训练集
+    valid_df.to_csv(valid_csv_path, index=False)
+    test_df.to_csv(test_csv_path, index=False)
+
+    print(f"\n训练集大小(包含增强图像): {len(train_augmented_df)}")
+    print(f"验证集大小: {len(valid_df)}")
+    print(f"测试集大小: {len(test_df)}")
+    print(f"类别数量: {num_classes}")
+    print(f"训练集CSV已保存至: {train_csv_path}")
+    print(f"验证集CSV已保存至: {valid_csv_path}")
+    print(f"测试集CSV已保存至: {test_csv_path}")
+    print(f"训练集图像已复制至: {train_img_dir}")
+    print(f"验证集图像已复制至: {valid_img_dir}")
+    print(f"测试集图像已复制至: {test_img_dir}")
+    print(f"对每个训练图像应用了 {len(augmentations)} 种不同的数据增强方法")
 
 
 # ===== 优化器工具相关功能 =====
@@ -340,6 +538,9 @@ def get_loss_function(loss_function_type):
     # L1正则化损失函数
     elif loss_function_type == 'l1_regularized_cross_entropy':
         return L1RegularizedLoss()
+    # LabelSmoothingCrossEntropy损失函数：带标签平滑的交叉熵损失，有助于防止过拟合
+    elif loss_function_type == 'label_smoothing_cross_entropy':
+        return LabelSmoothingCrossEntropy(smoothing=0.1)
     else:
         # 默认使用CrossEntropyLoss
         print(f"警告：未知的损失函数类型 '{loss_function_type}'，默认使用CrossEntropyLoss")
@@ -392,6 +593,22 @@ class L1RegularizedLoss(nn.Module):
         return total_loss
 
 
+# 添加LabelSmoothingCrossEntropy损失函数
+class LabelSmoothingCrossEntropy(nn.Module):
+    def __init__(self, smoothing=0.1):
+        super().__init__()
+        self.smoothing = smoothing
+        self.confidence = 1.0 - smoothing
+
+    def forward(self, logits, target):
+        logprobs = F.log_softmax(logits, dim=-1)
+        nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
+        nll_loss = nll_loss.squeeze(1)
+        smooth_loss = -logprobs.mean(dim=-1)
+        loss = self.confidence * nll_loss + self.smoothing * smooth_loss
+        return loss.mean()
+
+
 def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay, l1_lambda=None):
     """
     根据指定的优化器类型创建并返回相应的优化器
@@ -441,6 +658,18 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay,
             lr=learning_rate,
             weight_decay=weight_decay
         )
+    # 改进AdamW优化器配置
+    elif optimizer_type == 'adamw':
+        # AdamW优化器：对权重衰减实现更合理的Adam变种
+        # 使用带有权重衰减修正的AdamW
+        return optim.AdamW(
+            param_groups,
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            amsgrad=True  # 添加amsgrad改进
+        )
     # SGD优化器：随机梯度下降优化器，适用于小批量数据
     elif optimizer_type == 'sgd':
         return optim.SGD(
@@ -467,6 +696,70 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay,
         )
 
 
+class WarmupScheduler:
+    """
+    学习率预热调度器
+    用于在训练初期逐步增加学习率到目标值，然后再应用常规学习率调度策略
+    """
+    def __init__(self, optimizer, warmup_epochs, target_lr, scheduler_type='cosine', warmup_type='linear', **kwargs):
+        """
+        初始化学习率预热调度器
+        
+        参数:
+            optimizer: 优化器实例
+            warmup_epochs: 预热轮数
+            target_lr: 预热结束后的目标学习率
+            scheduler_type: 预热结束后使用的学习率调度器类型
+            warmup_type: 预热类型，'linear'表示线性增长，'cosine'表示余弦增长
+            **kwargs: 传递给后续学习率调度器的参数
+        """
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.target_lr = target_lr
+        self.warmup_type = warmup_type
+        self.current_epoch = 0
+        
+        # 保存初始学习率（用于预热）
+        self.base_lr = [group['lr'] for group in optimizer.param_groups]
+        
+        # 初始化预热后的学习率调度器
+        self.scheduler = get_lr_scheduler(optimizer, scheduler_type, **kwargs)
+    
+    def get_warmup_lr(self):
+        """根据当前轮数计算预热学习率"""
+        progress = self.current_epoch / self.warmup_epochs
+        
+        if self.warmup_type == 'linear':
+            # 线性增长学习率
+            lr_factor = progress
+        elif self.warmup_type == 'cosine':
+            # 余弦增长学习率
+            lr_factor = 0.5 * (1 - math.cos(math.pi * progress))
+        else:
+            lr_factor = 1.0
+        
+        return [self.target_lr * lr_factor for _ in self.base_lr]
+    
+    def step(self):
+        """更新学习率"""
+        if self.current_epoch < self.warmup_epochs:
+            # 预热阶段
+            warmup_lrs = self.get_warmup_lr()
+            for param_group, lr in zip(self.optimizer.param_groups, warmup_lrs):
+                param_group['lr'] = lr
+        else:
+            # 预热结束后，使用正常学习率调度器
+            self.scheduler.step()
+        
+        self.current_epoch += 1
+    
+    def get_last_lr(self):
+        """获取当前学习率"""
+        if hasattr(self.scheduler, 'get_last_lr'):
+            return self.scheduler.get_last_lr()
+        return [group['lr'] for group in self.optimizer.param_groups]
+
+
 def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
     """
     创建并返回学习率调度器
@@ -474,11 +767,28 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
     参数:
         optimizer: 优化器实例
         scheduler_type: 学习率调度器类型
-        **kwargs: 其他调度器参数
+        **kwargs: 其他调度器参数，支持warmup_epochs参数用于启用学习率预热
     
     返回:
         创建的学习率调度器实例
     """
+    # 检查是否需要学习率预热
+    warmup_epochs = kwargs.pop('warmup_epochs', 0)
+    if warmup_epochs > 0:
+        # 获取目标学习率，默认为当前优化器的学习率
+        target_lr = kwargs.pop('target_lr', optimizer.param_groups[0]['lr'])
+        warmup_type = kwargs.pop('warmup_type', 'linear')
+        
+        # 创建带预热的学习率调度器
+        return WarmupScheduler(
+            optimizer, 
+            warmup_epochs, 
+            target_lr, 
+            scheduler_type, 
+            warmup_type, 
+            **kwargs
+        )
+    
     #  StepLR学习率调度器：每隔固定步数衰减学习率
     if scheduler_type == 'step':
         step_size = kwargs.get('step_size', 10)
@@ -519,7 +829,7 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
         # T_0是第一个重启周期的大小
         T_0 = kwargs.get('T_0', 10)
         # T_mult控制后续重启周期的增长因子
-        T_mult = kwargs.get('T_mult', 1)
+        T_mult = kwargs.get('T_mult', 2)
         # eta_min是最小学习率，默认为0
         eta_min = kwargs.get('eta_min', 0)
         return optim.lr_scheduler.CosineAnnealingWarmRestarts(

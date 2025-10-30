@@ -3,7 +3,8 @@ import torchvision.models as models
 
 
 class FlowerNet(nn.Module):
-    def __init__(self, num_classes, pretrained, model_name, use_layer_norm=False):
+    def __init__(self, num_classes, pretrained, model_name, use_layer_norm=False, activation_fn='gelu',
+                 use_attention=False):
         super().__init__()
 
         # 根据指定的模型名称选择适当的ResNet变体
@@ -31,33 +32,53 @@ class FlowerNet(nn.Module):
         # 保留ResNet的卷积层和池化层
         self.conv1 = resnet.conv1
         self.bn1 = resnet.bn1
-        self.relu = resnet.relu
-        self.maxpool = resnet.maxpool
 
+        # 替换激活函数
+        self.activation_fn = activation_fn
+        if activation_fn == 'gelu':
+            self.relu = nn.GELU()
+        elif activation_fn == 'swish':
+            self.relu = nn.SiLU()
+        elif activation_fn == 'mish':
+            self.relu = nn.Mish()
+        elif activation_fn == 'leaky_relu':
+            self.relu = nn.LeakyReLU(negative_slope=0.1)
+        else:
+            self.relu = resnet.relu
+            print(f"警告: 不支持的激活函数 '{activation_fn}'，已使用默认的ReLU")
+
+        self.maxpool = resnet.maxpool
         self.layer1 = resnet.layer1
         self.layer2 = resnet.layer2
-        self.layer3 = resnet.layer3 
+        self.layer3 = resnet.layer3
         self.layer4 = resnet.layer4
 
         # 全局平均池化和扁平化
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.flatten = nn.Flatten()
 
-        # 添加Dropout层来防止过拟合，特别适合大数据集
-        self.dropout = nn.Dropout(p=0.5)
-        # 增加第二个Dropout层以增强正则化效果
-        self.dropout2 = nn.Dropout(p=0.3)
-        
+        # 可选的注意力机制
+        self.use_attention = use_attention
+        if self.use_attention:
+            self.attention = nn.Sequential(
+                nn.Linear(feature_dim, feature_dim // 4),
+                nn.Tanh(),
+                nn.Linear(feature_dim // 4, feature_dim),
+                nn.Sigmoid()
+            )
+
+        # 改进的分类头 - 两层MLP
+        self.dropout1 = nn.Dropout(p=0.3)
+        self.dropout2 = nn.Dropout(p=0.5)
+
         # 可选的LayerNorm层
         self.use_layer_norm = use_layer_norm
         if self.use_layer_norm:
             self.layer_norm = nn.LayerNorm(feature_dim)
 
-        # 全连接分类层，使用两层结构增强分类能力
-        self.fc1 = nn.Linear(in_features=feature_dim, out_features=512)
-        self.fc_bn = nn.BatchNorm1d(512)
-        self.fc_relu = nn.ReLU()
-        self.fc2 = nn.Linear(in_features=512, out_features=num_classes)
+        # 添加中间隐藏层增强模型表达能力
+        self.fc1 = nn.Linear(in_features=feature_dim, out_features=feature_dim // 2)
+        self.fc2 = nn.Linear(in_features=feature_dim // 2, out_features=num_classes)
 
     def forward(self, inputs):
         # 主干特征提取
@@ -74,16 +95,20 @@ class FlowerNet(nn.Module):
         # 池化和扁平化
         outputs = self.avgpool(outputs)
         outputs = self.flatten(outputs)
-        
+
         # 可选的LayerNorm
         if self.use_layer_norm:
             outputs = self.layer_norm(outputs)
 
+        # 可选的注意力机制
+        if self.use_attention:
+            attention_weights = self.attention(outputs)
+            outputs = outputs * attention_weights
+
         # 分类层，带Dropout防止过拟合
-        outputs = self.dropout(outputs)
+        outputs = self.dropout1(outputs)
         outputs = self.fc1(outputs)
-        outputs = self.fc_bn(outputs)
-        outputs = self.fc_relu(outputs)
+        outputs = self.relu(outputs)  # 在隐藏层后添加激活函数
         outputs = self.dropout2(outputs)
         outputs = self.fc2(outputs)
 

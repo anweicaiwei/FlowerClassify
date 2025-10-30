@@ -14,6 +14,46 @@ from utils import get_test_dataset
 # 设置固定的配置参数，替代从配置文件读取
 def main():
     """主函数，执行模型预测（无标签推理）"""
+    configs = {
+        # "device": "cuda",
+        "data-root": "../data/flowerclassify/train/train",
+        "data-label": "../data/flowerclassify/train_labels.csv",
+        "valid-split-ratio": 0.15,
+        "test-split-ratio": 0.15,
+        "test-csv-file": "datasets/test_split.csv",
+        "test-img-dir": "datasets/test",
+        "custom-model-params-path": "../model/best-model.pt",
+        "custom-output-path": "../results/submission.csv",
+        "model-name": "resnet50",
+        "batch-size": 64,
+        "num-epochs": 100,
+        "num-workers": 20,
+        "num-classes": 100,
+        "log-interval": 10,
+        "load-checkpoint": False,
+        "load-pretrained": False,
+        "load-checkpoint-path": "checkpoints/best-ckpt.pt",
+        "loss-function": "label_smoothing_cross_entropy",
+        "learning-rate": 0.00005,
+        "weight-decay": 0.0005,
+        "optimizer-type": "adamw",
+        "lr-scheduler-type": "cosine_warm_restarts",
+        "lr-scheduler-step-size": 10,
+        "lr-scheduler-gamma": 0.5,
+        "warmup_epochs": 5,
+        "warmup_type": "cosine",
+        "early-stopping-patience": 10,
+        "l1-lambda": 0.0000005,
+        "use-layer-norm": True,
+        "use-grad-clip": True,
+        "grad-clip-value": 1.0,
+        "activation-fn": "gelu",
+        "use-mixup": True,
+        "mixup-alpha": 0.8,
+        "stage_epochs": [10, 15, 20],
+        "freeze_layers": True
+    }
+
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='花卉分类模型预测脚本')
     parser.add_argument('test_folder', help='测试文件夹路径')
@@ -36,49 +76,52 @@ def main():
     if test_dataset is None:
         sys.exit(1)
 
-    # 创建数据加载器
+    # 获取数据集大小
+    dataset_size = len(test_dataset)
+
+    # 创建数据加载器 - 使用configs中的参数
     dataloader = DataLoader(
         test_dataset,
-        batch_size=64,  # 固定批量大小
-        num_workers=4,   # 固定工作进程数
+        batch_size=configs["batch-size"],  # 使用configs中的批量大小
+        num_workers=configs["num-workers"],  # 使用configs中的工作进程数
         shuffle=False
     )
 
+    dataloader_size = len(dataloader)
+
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # 获取激活函数配置，默认为gelu
+    activation_fn = configs.get('activation-fn', 'gelu')
 
-    # 初始化模型 - 使用默认参数
+    # 初始化模型 - 使用configs中的参数
     model = FlowerNet(
-        num_classes=100,  # 类别数
-        pretrained=False,   # 不使用预训练权重
-        model_name='resnet34',  # 模型架构
-        use_layer_norm=True  # 使用LayerNorm
+        num_classes=configs["num-classes"],  # 使用configs中的类别数
+        pretrained=configs["load-pretrained"],  # 使用预训练权重
+        model_name=configs["model-name"],  # 使用configs中的模型架构
+        use_layer_norm=configs["use-layer-norm"],  # 使用configs中的LayerNorm配置
+        activation_fn=activation_fn  # 添加激活函数参数
     )
     model = model.to(device)
 
-    # 固定模型参数路径
-    model_params_path = '../model/best-model.pt'
+    # 使用configs中的模型参数路径
+    model_params_path = configs["custom-model-params-path"]
 
     # 确保指定的模型参数文件存在
     if not os.path.exists(model_params_path):
         print(f"错误：指定的模型参数文件不存在: {model_params_path}")
         sys.exit(1)
 
+    log_interval = configs['log-interval']
+
+    print(f'\n---------- prediction start at: {device} ----------\n')
+    print(f'使用测试图像目录: {test_img_dir}')
+    print(f'使用激活函数: {activation_fn}')
+    print(f"正在加载模型参数: {model_params_path}")
+
     # 类别映射
-    category_to_idx = {
-        "164": 0, "165": 1, "166": 2, "167": 3, "169": 4, "171": 5, "172": 6, "173": 7, "174": 8, "176": 9,
-        "177": 10, "178": 11, "179": 12, "180": 13, "183": 14, "184": 15, "185": 16, "186": 17, "188": 18,
-        "189": 19, "190": 20, "192": 21, "193": 22, "194": 23, "195": 24, "197": 25, "198": 26, "199": 27,
-        "200": 28, "201": 29, "202": 30, "203": 31, "204": 32, "205": 33, "206": 34, "207": 35, "208": 36,
-        "209": 37, "210": 38, "211": 39, "212": 40, "213": 41, "214": 42, "215": 43, "216": 44, "217": 45,
-        "218": 46, "220": 47, "221": 48, "222": 49, "223": 50, "224": 51, "225": 52, "226": 53, "227": 54,
-        "228": 55, "229": 56, "230": 57, "231": 58, "232": 59, "233": 60, "234": 61, "235": 62, "236": 63,
-        "237": 64, "238": 65, "239": 66, "240": 67, "241": 68, "242": 69, "243": 70, "244": 71, "245": 72,
-        "1734": 73, "1743": 74, "1747": 75, "1749": 76, "1750": 77, "1751": 78, "1759": 79, "1765": 80,
-        "1770": 81, "1772": 82, "1774": 83, "1776": 84, "1777": 85, "1780": 86, "1784": 87, "1785": 88,
-        "1786": 89, "1789": 90, "1796": 91, "1797": 92, "1801": 93, "1805": 94, "1806": 95, "1808": 96,
-        "1818": 97, "1827": 98, "1833": 99
-    }
+    category_to_idx = {"164": 0, "165": 1, "166": 2, "167": 3, "169": 4, "171": 5, "172": 6, "173": 7, "174": 8, "176": 9, "177": 10, "178": 11, "179": 12, "180": 13, "183": 14, "184": 15, "185": 16, "186": 17, "188": 18, "189": 19, "190": 20, "192": 21, "193": 22, "194": 23, "195": 24, "197": 25, "198": 26, "199": 27, "200": 28, "201": 29, "202": 30, "203": 31, "204": 32, "205": 33, "206": 34, "207": 35, "208": 36, "209": 37, "210": 38, "211": 39, "212": 40, "213": 41, "214": 42, "215": 43, "216": 44, "217": 45, "218": 46, "220": 47, "221": 48, "222": 49, "223": 50, "224": 51, "225": 52, "226": 53, "227": 54, "228": 55, "229": 56, "230": 57, "231": 58, "232": 59, "233": 60, "234": 61, "235": 62, "236": 63, "237": 64, "238": 65, "239": 66, "240": 67, "241": 68, "242": 69, "243": 70, "244": 71, "245": 72, "1734": 73, "1743": 74, "1747": 75, "1749": 76, "1750": 77, "1751": 78, "1759": 79, "1765": 80, "1770": 81, "1772": 82, "1774": 83, "1776": 84, "1777": 85, "1780": 86, "1784": 87, "1785": 88, "1786": 89, "1789": 90, "1796": 91, "1797": 92, "1801": 93, "1805": 94, "1806": 95, "1808": 96, "1818": 97, "1827": 98, "1833": 99}
     
     # 创建反向映射：从索引映射回原始类别ID
     idx_to_category = {int(v): k for k, v in category_to_idx.items()}
@@ -91,12 +134,13 @@ def main():
         try:
             model.load_state_dict(torch.load(model_params_path, map_location=device, weights_only=True))
             model.eval()
+            print(f"模型加载成功！开始预测...")
         except Exception as e:
             print(f"加载模型时出错: {e}")
             sys.exit(1)
 
         # 处理无标签数据
-        for images, _, filenames in dataloader:
+        for batch, (images, _, filenames) in enumerate(dataloader, start=1):
             images = images.to(device)
             outputs = model(images)
 
@@ -120,6 +164,9 @@ def main():
                 # 添加到预测列表
                 predictions.append([img_name, predicted_category, confidence])
 
+            if batch % log_interval == 0:
+                print(f'[predict] [{batch:04d}/{dataloader_size:04d}]')
+
     # 确保输出目录存在
     output_dir = os.path.dirname(output_file)
     if output_dir and not os.path.exists(output_dir):
@@ -129,6 +176,8 @@ def main():
     df = pd.DataFrame(predictions, columns=['filename', 'category_id', 'confidence'])
     df.to_csv(output_file, index=False)
     print(f"预测结果已保存到: {output_file}")
+    print('--------------------------------------\n')
+    print('---------- prediction finished ----------\n')
 
 if __name__ == '__main__':
     main()
