@@ -1,13 +1,93 @@
 import os  # 导入os用于路径处理
+import random
 import shutil  # 导入shutil用于文件复制
-import toml
 
 import pandas as pd  # 导入pandas用于读取CSV
+import toml
+import torchvision.transforms as transforms
+from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.io import read_image  # 导入读取图像的函数
 from tqdm import tqdm  # 导入tqdm用于显示进度条
 
 configs = toml.load('configs/config_OneGPU.toml')
+
+# 将数据增强功能移到模块级别，确保可以在任何地方访问
+
+def get_augmentations():
+    """创建并返回所有数据增强方法的列表
+    Returns:
+        list: 包含所有增强方法的列表
+    """
+    # 增强方式1：随机水平翻转+颜色抖动
+    aug1 = transforms.Compose([
+        transforms.RandomHorizontalFlip(p=1.0),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        transforms.Resize((600, 600)),  # 输出尺寸为600x600
+    ])
+    # 增强方式2：随机旋转+放大
+    aug2 = transforms.Compose([
+        transforms.RandomRotation(degrees=(-10, 10)),
+        transforms.Resize((600, 600)),
+        # # 直接放大到目标尺寸的1.3倍
+        # transforms.Resize((int(600*1.3), int(600*1.3))),
+        transforms.CenterCrop((600, 600)),  # 裁剪中心600x600，去除黑边
+    ])
+    # 增强方式3：亮度调整+高斯模糊
+    aug3 = transforms.Compose([
+        transforms.ColorJitter(brightness=(0.7, 1.3)),
+        transforms.GaussianBlur(kernel_size=3),
+        transforms.Resize((600, 600)),
+    ])
+    # 增强方式4：垂直翻转+饱和度调整
+    aug4 = transforms.Compose([
+        transforms.RandomVerticalFlip(p=1.0),
+        transforms.ColorJitter(saturation=(0.7, 1.3)),
+        transforms.Resize((600, 600)),
+    ])
+    # 增强方式5：随机灰度+对比度调整
+    aug5 = transforms.Compose([
+        transforms.RandomGrayscale(p=1.0),
+        transforms.ColorJitter(contrast=(0.7, 1.3)),
+        transforms.Resize((600, 600)),
+    ])
+    
+    # 返回所有增强方法的列表
+    return [aug1, aug2, aug3, aug4, aug5]
+
+
+def apply_all_augmentations(image_path, save_path, augmentations):
+    """应用所有数据增强方法并保存图像
+    Args:
+        image_path (str): 原始图像路径
+        save_path (str): 保存增强图像的路径
+        augmentations (list): 所有增强方法的列表
+    Returns:
+        list: 包含所有生成的增强图像文件名的列表
+    """
+    generated_files = []
+    try:
+        # 使用PIL打开图像
+        image = Image.open(image_path).convert('RGB')
+        
+        # 保存原始图像
+        base_name, ext = os.path.splitext(save_path)
+        image.save(save_path)
+        generated_files.append(os.path.basename(save_path))
+        
+        # 应用每一种数据增强方法并保存
+        for i, augmentation in enumerate(augmentations):
+            augmented_image = augmentation(image)
+            # 保存增强图像，添加增强标记
+            augmented_save_path = os.path.join(os.path.dirname(save_path), f"{os.path.basename(base_name)}_aug{i}{ext}")
+            augmented_image.save(augmented_save_path)
+            generated_files.append(os.path.basename(augmented_save_path))
+        
+        return generated_files
+    except Exception as e:
+        print(f"处理图像时出错 {image_path}: {e}")
+        return []
+
 
 def create_category_mapping(df):
     """创建类别ID到索引的映射，确保类别索引从0开始连续"""
@@ -25,7 +105,7 @@ class FlowerDataset(Dataset):
         """
         self.data_frame = pd.read_csv(csv_file)
         self.img_dir = img_dir
-        self.transform = transform
+        self.transforms = transform
         # 创建类别映射
         self.category_to_idx = create_category_mapping(self.data_frame)
         self.num_classes = len(self.category_to_idx)
@@ -47,9 +127,16 @@ class FlowerDataset(Dataset):
             image = read_image(img_path)
             
             # 将PIL图像转换为Tensor并应用变换
-            if self.transform:
-                image = self.transform(image)
-            
+            if self.transforms:
+                # 检查transforms是否为列表
+                if isinstance(self.transforms, list):
+                    # 如果是列表，则随机选择一个变换
+                    selected_transform = random.choice(self.transforms)
+                    image = selected_transform(image)
+                else:
+                    # 如果不是列表，则直接应用变换
+                    image = self.transforms(image)
+                
             # 将类别ID映射为索引
             label = self.category_to_idx[category_id]
             
@@ -70,6 +157,7 @@ class FlowerDataset(Dataset):
 
 
 # 修改后的函数，支持将数据集分为train、valid、test三部分
+
 def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     """准备训练集、验证集和测试集
     Args:
@@ -77,10 +165,10 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
         img_dir (string): 原始图像文件夹的路径
         valid_ratio (float): 验证集占总数据集的比例
         test_ratio (float): 测试集占总数据集的比例
-    Returns:
-        tuple: (train_dataset, valid_dataset, test_dataset, num_classes) 如果需要返回数据集对象
-        或者只打印信息不返回数据集对象
     """
+    # 获取所有增强方法
+    augmentations = get_augmentations()
+    
     # 读取原始CSV文件
     df = pd.read_csv(csv_file)
     
@@ -143,13 +231,26 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     total_files = len(train_df) + len(valid_df) + len(test_df)
     print(f"开始处理数据集，总计 {total_files} 个文件...")
     
-    # 复制训练集图像，显示总体进度
-    print("\n复制训练集图像...")
+    # 复制训练集图像并应用增强，显示总体进度
+    print("\n复制训练集图像并应用所有数据增强方法...")
+    train_data_augmented = []
+    
     for _, row in tqdm(train_df.iterrows(), total=len(train_df), desc="训练集", unit="文件"):
         src_path = os.path.join(img_dir, row['filename'])
         dst_path = os.path.join(train_img_dir, row['filename'])
-        # 直接复制文件，覆盖已存在的文件
-        shutil.copy2(src_path, dst_path)
+        
+        # 应用所有增强方法并保存图像
+        generated_files = apply_all_augmentations(src_path, dst_path, augmentations)
+        
+        if generated_files:
+            # 添加所有生成的图像到增强数据集
+            for file_name in generated_files:
+                augmented_row = row.copy()
+                augmented_row['filename'] = file_name
+                train_data_augmented.append(augmented_row)
+    
+    # 创建增强后的训练数据集DataFrame
+    train_augmented_df = pd.DataFrame(train_data_augmented)
     
     # 复制验证集图像，显示总体进度
     print("\n复制验证集图像...")
@@ -173,11 +274,11 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     valid_csv_path = os.path.join('datasets', 'valid_split.csv')
     test_csv_path = os.path.join('datasets', 'test_split.csv')
     
-    train_df.to_csv(train_csv_path, index=False)
+    train_augmented_df.to_csv(train_csv_path, index=False)  # 保存增强后的训练集
     valid_df.to_csv(valid_csv_path, index=False)
     test_df.to_csv(test_csv_path, index=False)
     
-    print(f"\n训练集大小: {len(train_df)}")
+    print(f"\n训练集大小(包含增强图像): {len(train_augmented_df)}")
     print(f"验证集大小: {len(valid_df)}")
     print(f"测试集大小: {len(test_df)}")
     print(f"类别数量: {num_classes}")
@@ -187,6 +288,7 @@ def prepare_datasets(csv_file, img_dir, valid_ratio=0.15, test_ratio=0.15):
     print(f"训练集图像已复制至: {train_img_dir}")
     print(f"验证集图像已复制至: {valid_img_dir}")
     print(f"测试集图像已复制至: {test_img_dir}")
+    print(f"对每个训练图像应用了 {len(augmentations)} 种不同的数据增强方法")
     
     # 根据用户需求，只生成一次数据，不需要返回数据集对象供训练使用
     # 因此不创建数据集实例，只生成文件即可

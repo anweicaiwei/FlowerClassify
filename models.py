@@ -3,7 +3,7 @@ import torchvision.models as models
 
 
 class FlowerNet(nn.Module):
-    def __init__(self, num_classes, pretrained, model_name, use_layer_norm=False):
+    def __init__(self, num_classes, pretrained, model_name, use_layer_norm=False, activation_fn='gelu'):
         super().__init__()
 
         # 根据指定的模型名称选择适当的ResNet变体
@@ -31,7 +31,26 @@ class FlowerNet(nn.Module):
         # 保留ResNet的卷积层和池化层
         self.conv1 = resnet.conv1
         self.bn1 = resnet.bn1
-        self.relu = resnet.relu
+        
+        # 替换激活函数
+        self.activation_fn = activation_fn
+        if activation_fn == 'gelu':
+            # GELU激活函数: x * Φ(x)，Φ为标准正态分布的累积分布函数
+            self.relu = nn.GELU()
+        elif activation_fn == 'swish':
+            # Swish激活函数: x * sigmoid(x)
+            self.relu = nn.SiLU()  # PyTorch 1.7+中的SiLU就是Swish
+        elif activation_fn == 'mish':
+            # Mish激活函数: x * tanh(softplus(x))
+            self.relu = nn.Mish()
+        elif activation_fn == 'leaky_relu':
+            # LeakyReLU激活函数: max(0, x) + negative_slope * min(0, x)
+            self.relu = nn.LeakyReLU(negative_slope=0.1)
+        else:
+            # 默认为ReLU
+            self.relu = resnet.relu
+            print(f"警告: 不支持的激活函数 '{activation_fn}'，已使用默认的ReLU")
+
         self.maxpool = resnet.maxpool
 
         self.layer1 = resnet.layer1

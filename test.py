@@ -3,7 +3,7 @@ import pandas as pd
 import re
 from tqdm import tqdm  # 导入tqdm库用于显示进度条
 
-
+# 为增强后的数据生成与原始CSV相同结构的标签文件
 def generate_augmented_labels(original_csv_path, augmented_img_dir, output_csv_path):
     """
     为增强后的数据生成与原始CSV相同结构的标签文件
@@ -73,7 +73,7 @@ def generate_augmented_labels(original_csv_path, augmented_img_dir, output_csv_p
 if __name__ == "__main__":
     # 示例用法
     original_csv = "datasets/data_labels.csv"  # 原始标签文件路径
-    augmented_dir = "D:/ProjectDevelop/Data/Data/train_augmented"  # 增强后图像目录
-    output_csv = "D:/ProjectDevelop/Data/Data/train_augmented_labels.csv"  # 输出标签文件路径
+    augmented_dir = "datasets/train"  # 增强后图像目录
+    output_csv = "datasets/train_split.csv"  # 输出标签文件路径
 
     generate_augmented_labels(original_csv, augmented_dir, output_csv)

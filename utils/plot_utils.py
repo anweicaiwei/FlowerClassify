@@ -72,7 +72,7 @@ class PlotManager:
         """更新并保存图表"""
         try:
             # 设置中文字体支持
-            plt.rcParams["font.family"] = ["SimSun"]
+            plt.rcParams["font.family"] = ["WenQuanYi Micro Hei"]
             plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
             
             # 创建图表和子图

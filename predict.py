@@ -19,8 +19,8 @@ def main():
 
     # 创建测试集的变换
     test_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ConvertImageDtype(torch.float32),  # 将uint8转换为float32
+        transforms.Resize((400, 400)),  # 调整为模型输入大小
+        transforms.ConvertImageDtype(torch.float32),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
 
@@ -70,11 +70,15 @@ def main():
     device = torch.device(configs['device'])
 
     # 初始化模型 - 根据配置文件传递所有必要参数
+    # 获取激活函数配置，默认为gelu
+    activation_fn = configs.get('activation-fn', 'gelu')
+    
     model = FlowerNet(
         num_classes=configs['num-classes'],
         pretrained=configs.get('load-pretrained', False),
         model_name=configs.get('model-name', 'resnet18'),
-        use_layer_norm=configs.get('use-layer-norm', False)  # 关键修复：添加这个参数以匹配训练时的配置
+        use_layer_norm=configs.get('use-layer-norm', False),
+        activation_fn=activation_fn
     )
     model = model.to(device)
 
@@ -83,6 +87,8 @@ def main():
     print(f'\n---------- prediction start at: {device} ----------\n')
     print(f'使用测试集: {test_csv_file}')
     print(f'图像目录: {test_img_dir}')
+    # 添加激活函数信息打印
+    print(f'使用激活函数: {activation_fn}')
 
     # 从配置中获取自定义模型参数路径
     try:

@@ -1,5 +1,4 @@
 import os
-from datetime import datetime
 
 import toml
 import torch
@@ -8,9 +7,9 @@ from torch.utils.data import DataLoader
 
 from data_preparation import FlowerDataset
 from models import FlowerNet
+from utils.logging_utils import TrainingLogger, TrainingProcessLogger  # 导入日志记录器
 from utils.optim_utils import get_loss_function, get_optimizer, get_lr_scheduler
 from utils.plot_utils import PlotManager
-from utils.logging_utils import TrainingLogger, TrainingProcessLogger  # 导入日志记录器
 
 
 def main():
@@ -26,22 +25,13 @@ def main():
     # 初始化训练过程记录器，使用与参数记录器相同的时间戳
     process_logger = TrainingProcessLogger(timestamp=timestamp)
     
-    # 确保 training_logs 目录存在（虽然 TrainingLogger 初始化时已经会创建，但这里再次确认以增加健壮性）
+    # 确保 training_logs 目录存在
     os.makedirs('training_logs', exist_ok=True)
     
-    # 创建训练集和验证集的变换
-    train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ColorJitter(0.1, 0.1, 0.1),
-        # transforms.RandomRotation(10),
-        transforms.RandomHorizontalFlip(),
-        transforms.ConvertImageDtype(torch.float32),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        transforms.RandomErasing(),
-    ])
-    
-    valid_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
+    # 创建训练集和验证集的变换（简化版，因为增强已在数据准备阶段完成）
+    # 只需调整大小、转换类型和归一化
+    common_transform = transforms.Compose([
+        transforms.Resize((400, 400)),  # 调整为模型输入大小
         transforms.ConvertImageDtype(torch.float32),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
@@ -50,13 +40,13 @@ def main():
     train_dataset = FlowerDataset(
         csv_file='datasets/train_split.csv',
         img_dir='datasets/train',
-        transform=train_transform
+        transform=common_transform  # 使用简化的变换
     )
     
     valid_dataset = FlowerDataset(
         csv_file='datasets/valid_split.csv',
         img_dir='datasets/valid',
-        transform=valid_transform
+        transform=common_transform  # 使用相同的变换
     )
     
     # 获取类别数量和数据集大小
@@ -70,7 +60,7 @@ def main():
         train_dataset,
         batch_size=configs['batch-size'],
         num_workers=configs['num-workers'],
-        shuffle=True # 每次epoch都会随机打乱数据 增强模型泛化能力 防止过拟合
+        shuffle=True # 每次epoch都会打乱数据顺序 增强模型泛化能力 防止过拟合
     )
     
     valid_dataloader = DataLoader(
@@ -89,11 +79,15 @@ def main():
     
     # 初始化模型
     use_layer_norm = configs.get('use-layer-norm', False)
+    # 获取激活函数配置，默认为gelu
+    activation_fn = configs.get('activation-fn', 'gelu')
+    
     model = FlowerNet(
         num_classes=num_classes, 
         pretrained=configs['load-pretrained'], 
         model_name=configs['model-name'],
-        use_layer_norm=use_layer_norm
+        use_layer_norm=use_layer_norm,
+        activation_fn=activation_fn
     )
     model = model.to(device)
     
@@ -127,11 +121,20 @@ def main():
     
     # 添加学习率调度器
     scheduler_type = configs.get('lr-scheduler-type', 'step')
+    # 获取预热相关参数
+    warmup_epochs = configs.get('warmup_epochs', 0)
+    warmup_type = configs.get('warmup_type', 'linear')
+    
+    # 创建学习率调度器时传递预热参数
     scheduler = get_lr_scheduler(
         optimizer,
         scheduler_type,
         step_size=configs.get('lr-scheduler-step-size', 10),
-        gamma=configs.get('lr-scheduler-gamma', 0.5)
+        gamma=configs.get('lr-scheduler-gamma', 0.5),
+        T_max=configs.get('num-epochs', 100),  # 余弦退火调度器需要的T_max参数
+        eta_min=configs['learning-rate'] * 0.01,
+        warmup_epochs=warmup_epochs,
+        warmup_type=warmup_type
     )
     
     # 早停机制相关参数
@@ -179,6 +182,7 @@ def main():
         "checkpoint_dir": checkpoints_dir,
         "device": str(device),
         "use_layer_norm": use_layer_norm,
+        "activation_fn": activation_fn,  # 添加激活函数信息
         "use_l1_regularization": loss_function_type == 'l1_regularized_cross_entropy',
         "l1_lambda": l1_lambda,
         "use_grad_clip": use_grad_clip,
@@ -192,7 +196,10 @@ def main():
     print(f'\n---------- training start at: {device} ----------\n')
     print(f"损失函数: {loss_function_type}")
     print(f"优化器: {optimizer_type}")
+    # 在日志记录部分添加预热参数信息
     print(f"学习率调度器: {scheduler_type}")
+    if warmup_epochs > 0:
+        print(f"使用学习率预热: {warmup_type}方式，预热轮数: {warmup_epochs}")
     print(f"早停机制配置: 连续{early_stopping_patience}个epoch无提升则停止训练")
     if l1_lambda > 0:
         print(f"使用L1正则化，系数: {l1_lambda}")
@@ -200,7 +207,8 @@ def main():
         print(f"使用梯度裁剪，阈值: {grad_clip_value}")
     if use_layer_norm:
         print(f"使用LayerNorm层")
-    
+    # 添加激活函数信息打印
+    print(f"使用激活函数: {activation_fn}")
     process_logger.log_training_event("training_start", f"训练开始于设备: {device}")
     
     # 训练循环
@@ -231,6 +239,9 @@ def main():
         
         # 计算当前epoch的平均损失
         avg_epoch_loss = epoch_loss / len(train_dataloader)
+        
+        # 更新学习率（在验证前更新，符合PyTorch推荐实践）
+        scheduler.step()
         
         # 验证循环
         model.eval()

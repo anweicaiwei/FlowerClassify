@@ -3,6 +3,7 @@
 
     该模块提供了创建损失函数、优化器和学习率调度器的函数。
 """
+import math
 
 import torch
 import torch.nn as nn
@@ -31,6 +32,9 @@ def get_loss_function(loss_function_type):
     # L1正则化损失函数
     elif loss_function_type == 'l1_regularized_cross_entropy':
         return L1RegularizedLoss()
+    # 原始CrossEntropyLoss损失函数：标准的交叉熵损失函数，不包含L1正则化
+    elif loss_function_type == 'cross_entropy':
+        return nn.CrossEntropyLoss()
     else:
         # 默认使用CrossEntropyLoss
         print(f"警告：未知的损失函数类型 '{loss_function_type}'，默认使用CrossEntropyLoss")
@@ -132,6 +136,16 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay,
             lr=learning_rate,
             weight_decay=weight_decay
         )
+    elif optimizer_type == 'adamw':
+        # AdamW优化器：对权重衰减实现更合理的Adam变种
+        # 使用带有权重衰减修正的AdamW
+        return optim.AdamW(
+            param_groups,
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            betas=(0.9, 0.999),  # 默认参数，但明确写出以便调整
+            eps=1e-8
+        )
     # SGD优化器：随机梯度下降优化器，适用于小批量数据
     elif optimizer_type == 'sgd':
         return optim.SGD(
@@ -158,6 +172,71 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay,
         )
 
 
+class WarmupScheduler:
+    """
+    学习率预热调度器
+    用于在训练初期逐步增加学习率到目标值，然后再应用常规学习率调度策略
+    """
+    def __init__(self, optimizer, warmup_epochs, target_lr, scheduler_type='cosine', warmup_type='linear', **kwargs):
+        """
+        初始化学习率预热调度器
+        
+        参数:
+            optimizer: 优化器实例
+            warmup_epochs: 预热轮数
+            target_lr: 预热结束后的目标学习率
+            scheduler_type: 预热结束后使用的学习率调度器类型
+            warmup_type: 预热类型，'linear'表示线性增长，'cosine'表示余弦增长
+            **kwargs: 传递给后续学习率调度器的参数
+        """
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.target_lr = target_lr
+        self.warmup_type = warmup_type
+        self.current_epoch = 0
+        
+        # 保存初始学习率（用于预热）
+        self.base_lr = [group['lr'] for group in optimizer.param_groups]
+        
+        # 初始化预热后的学习率调度器
+        self.scheduler = get_lr_scheduler(optimizer, scheduler_type, **kwargs)
+    
+    def get_warmup_lr(self):
+        """根据当前轮数计算预热学习率"""
+        progress = self.current_epoch / self.warmup_epochs
+        
+        if self.warmup_type == 'linear':
+            # 线性增长学习率
+            lr_factor = progress
+        elif self.warmup_type == 'cosine':
+            # 余弦增长学习率
+            lr_factor = 0.5 * (1 - math.cos(math.pi * progress))
+        else:
+            lr_factor = 1.0
+        
+        return [self.target_lr * lr_factor for _ in self.base_lr]
+    
+    def step(self):
+        """更新学习率"""
+        if self.current_epoch < self.warmup_epochs:
+            # 预热阶段
+            warmup_lrs = self.get_warmup_lr()
+            for param_group, lr in zip(self.optimizer.param_groups, warmup_lrs):
+                param_group['lr'] = lr
+        else:
+            # 预热结束后，使用正常学习率调度器
+            self.scheduler.step()
+        
+        self.current_epoch += 1
+    
+    def get_last_lr(self):
+        """获取当前学习率"""
+        if hasattr(self.scheduler, 'get_last_lr'):
+            return self.scheduler.get_last_lr()
+        return [group['lr'] for group in self.optimizer.param_groups]
+
+
+# 修改get_lr_scheduler函数以支持预热
 def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
     """
     创建并返回学习率调度器
@@ -165,11 +244,28 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
     参数:
         optimizer: 优化器实例
         scheduler_type: 学习率调度器类型
-        **kwargs: 其他调度器参数
+        **kwargs: 其他调度器参数，支持warmup_epochs参数用于启用学习率预热
     
     返回:
         创建的学习率调度器实例
     """
+    # 检查是否需要学习率预热
+    warmup_epochs = kwargs.pop('warmup_epochs', 0)
+    if warmup_epochs > 0:
+        # 获取目标学习率，默认为当前优化器的学习率
+        target_lr = kwargs.pop('target_lr', optimizer.param_groups[0]['lr'])
+        warmup_type = kwargs.pop('warmup_type', 'linear')
+        
+        # 创建带预热的学习率调度器
+        return WarmupScheduler(
+            optimizer, 
+            warmup_epochs, 
+            target_lr, 
+            scheduler_type, 
+            warmup_type, 
+            **kwargs
+        )
+    
     #  StepLR学习率调度器：每隔固定步数衰减学习率
     if scheduler_type == 'step':
         step_size = kwargs.get('step_size', 10)
@@ -210,7 +306,7 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
         # T_0是第一个重启周期的大小
         T_0 = kwargs.get('T_0', 10)
         # T_mult控制后续重启周期的增长因子
-        T_mult = kwargs.get('T_mult', 1)
+        T_mult = kwargs.get('T_mult', 2)
         # eta_min是最小学习率，默认为0
         eta_min = kwargs.get('eta_min', 0)
         return optim.lr_scheduler.CosineAnnealingWarmRestarts(
