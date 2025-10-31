@@ -112,7 +112,7 @@ def main():
     # 从配置文件读取优化器类型并获取优化器
     optimizer_type = configs.get('optimizer-type', 'adam')
     optimizer = get_optimizer(
-        model,
+        model.parameters(),  # 修改这里，传递参数迭代器而不是整个模型
         optimizer_type,
         learning_rate=configs['learning-rate'],
         weight_decay=configs['weight-decay'],
@@ -215,6 +215,8 @@ def main():
     for epoch in range(configs['num-epochs']):
         model.train()
         epoch_loss = 0.0
+        train_correct = 0
+        train_total = 0
         
         for batch, (images, labels) in enumerate(train_dataloader, start=1):
             images = images.to(device)
@@ -232,13 +234,19 @@ def main():
             optimizer.step()
             epoch_loss += loss.item()
             
+            # 计算训练准确率
+            _, predicted = torch.max(outputs.data, 1)
+            train_total += labels.size(0)
+            train_correct += (predicted == labels).sum().item()
+            
             # 记录训练批次信息
             if batch % log_interval == 0:
                 print(f'[train] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(train_dataloader):04d}] loss: {loss.item():.5f}')
                 process_logger.log_training_batch(epoch, batch, len(train_dataloader), loss.item())
         
-        # 计算当前epoch的平均损失
+        # 计算当前epoch的平均损失和训练准确率
         avg_epoch_loss = epoch_loss / len(train_dataloader)
+        train_accuracy = train_correct / train_total
         
         # 更新学习率（在验证前更新，符合PyTorch推荐实践）
         scheduler.step()
@@ -246,23 +254,32 @@ def main():
         # 验证循环
         model.eval()
         with torch.no_grad():
-            accuracy = 0.0
+            valid_correct = 0
+            valid_total = 0
+            valid_loss = 0.0
             for batch, (images, labels) in enumerate(valid_dataloader, start=1):
                 images = images.to(device)
                 labels = labels.to(device)
                 outputs = model(images)
-                accuracy += (torch.argmax(outputs, dim=1) == labels).sum().item()
+                loss = criterion(outputs, labels)
+                valid_loss += loss.item()
+                
+                # 计算验证准确率
+                _, predicted = torch.max(outputs.data, 1)
+                valid_total += labels.size(0)
+                valid_correct += (predicted == labels).sum().item()
                 
                 # 记录验证批次信息
                 if batch % log_interval == 0:
                     print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(valid_dataloader):04d}]')
                     process_logger.log_validation_batch(epoch, batch, len(valid_dataloader))
             
-            accuracy /= valid_dataset_size
+            valid_accuracy = valid_correct / valid_total
+            avg_valid_loss = valid_loss / len(valid_dataloader)
             
             # 保存最佳模型
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
+            if valid_accuracy > best_accuracy:
+                best_accuracy = valid_accuracy
                 torch.save(model.state_dict(), best_checkpoint_path)
                 print(f"新的最佳模型已保存: {best_checkpoint_path}")
                 process_logger.log_model_saving(epoch, best_checkpoint_path, is_best=True)
@@ -273,7 +290,7 @@ def main():
                 process_logger.log_training_event("early_stopping", f"早停计数器: {early_stopping_counter}/{early_stopping_patience}")
             
             # 保存最新模型
-            last_accuracy = accuracy
+            last_accuracy = valid_accuracy
             torch.save(model.state_dict(), last_checkpoint_path)
             process_logger.log_model_saving(epoch, last_checkpoint_path, is_best=False)
             
@@ -287,18 +304,17 @@ def main():
                 print(f"类别映射已保存至: {category_map_path}")
                 process_logger.log_training_event("category_map_saved", f"类别映射已保存至: {category_map_path}")
         
-        print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {accuracy:.4f}')
+        print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {valid_accuracy:.4f}')
         print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.8f}')
+        print(f'训练准确率: {train_accuracy:.4f}, 训练损失: {avg_epoch_loss:.5f}')
+        print(f'验证准确率: {valid_accuracy:.4f}, 验证损失: {avg_valid_loss:.5f}')
         
         # 记录epoch结束信息
-        process_logger.log_epoch_end(epoch, avg_epoch_loss, accuracy, optimizer.param_groups[0]["lr"], best_accuracy)
+        process_logger.log_epoch_end(epoch, avg_epoch_loss, valid_accuracy, optimizer.param_groups[0]["lr"], best_accuracy)
         
         # 更新绘图
         if plot_manager:
-            plot_manager.update(epoch + 1, avg_epoch_loss, accuracy, configs['num-epochs'])
-        
-        # 更新学习率
-        scheduler.step()
+            plot_manager.update(epoch + 1, avg_epoch_loss, avg_valid_loss, train_accuracy, valid_accuracy, configs['num-epochs'])
         
         # 检查早停条件
         if early_stopping_counter >= early_stopping_patience:

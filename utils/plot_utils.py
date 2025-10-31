@@ -1,4 +1,3 @@
-
 """
     绘图工具模块
 
@@ -22,6 +21,8 @@ class PlotManager:
             save_dir: 图表保存目录
         """
         self.train_losses = []  # 训练损失记录
+        self.valid_losses = []  # 验证损失记录
+        self.train_accuracies = []  # 训练准确率记录
         self.valid_accuracies = []  # 验证准确率记录
         self.epochs = []  # 轮次记录
         self.num_epochs = 0  # 总轮次记录
@@ -32,8 +33,10 @@ class PlotManager:
         self.timestamp = self.start_time.strftime('%Y%m%d_%H%M%S')
         
         # 跟踪最佳指标
-        self.min_loss = float('inf')
-        self.max_accuracy = 0.0
+        self.min_train_loss = float('inf')
+        self.min_valid_loss = float('inf')
+        self.max_train_accuracy = 0.0
+        self.max_valid_accuracy = 0.0
         
         # 创建保存目录
         os.makedirs(save_dir, exist_ok=True)
@@ -44,26 +47,34 @@ class PlotManager:
         self.filename = f'training_metrics_{self.timestamp}.png'
         self.save_path = os.path.join(self.save_dir, self.filename)
 
-    def update(self, epoch, train_loss, valid_accuracy, num_epochs):
+    def update(self, epoch, train_loss, valid_loss, train_accuracy, valid_accuracy, num_epochs):
         """更新训练数据并更新图表
 
         Args:
             epoch: 当前轮次
             train_loss: 当前轮次的训练损失
+            valid_loss: 当前轮次的验证损失
+            train_accuracy: 当前轮次的训练准确率
             valid_accuracy: 当前轮次的验证准确率
             num_epochs: 总轮次
         """
         # 记录数据
         self.epochs.append(epoch)
         self.train_losses.append(train_loss)
+        self.valid_losses.append(valid_loss)
+        self.train_accuracies.append(train_accuracy)
         self.valid_accuracies.append(valid_accuracy)
         self.num_epochs = num_epochs
         
         # 更新最佳指标
-        if train_loss < self.min_loss:
-            self.min_loss = train_loss
-        if valid_accuracy > self.max_accuracy:
-            self.max_accuracy = valid_accuracy
+        if train_loss < self.min_train_loss:
+            self.min_train_loss = train_loss
+        if valid_loss < self.min_valid_loss:
+            self.min_valid_loss = valid_loss
+        if train_accuracy > self.max_train_accuracy:
+            self.max_train_accuracy = train_accuracy
+        if valid_accuracy > self.max_valid_accuracy:
+            self.max_valid_accuracy = valid_accuracy
         
         # 每个epoch都更新并保存同一张图表
         self._update_plot()
@@ -75,28 +86,30 @@ class PlotManager:
             plt.rcParams["font.family"] = ["WenQuanYi Micro Hei"]
             plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
             
-            # 创建图表和子图
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+            # 创建图表和子图（3个子图：损失对比、准确率对比）
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
             fig.subplots_adjust(wspace=0.3)  # 调整子图间距
             
             # 设置图表标题
             fig.suptitle(f'训练过程监控 - 开始时间: {self.start_time.strftime("%Y-%m-%d %H:%M:%S")}\n当前轮次: {self.epochs[-1]}/{self.num_epochs}', fontsize=16)
             
-            # 绘制训练损失曲线
+            # 绘制训练和验证损失曲线
             ax1.plot(self.epochs, self.train_losses, 'b-', linewidth=2, label='训练损失')
+            ax1.plot(self.epochs, self.valid_losses, 'g--', linewidth=2, label='验证损失')
             ax1.set_xlabel('轮次')
             ax1.set_ylabel('损失值')
-            ax1.set_title(f'训练损失曲线 - 平均损失: {self.min_loss:.4f}')
+            ax1.set_title(f'训练/验证损失对比\n最小训练损失: {self.min_train_loss:.4f}, 最小验证损失: {self.min_valid_loss:.4f}')
             ax1.grid(True, linestyle='--', alpha=0.7)
             ax1.legend(loc='best')
             # 设置X轴为整数刻度
             ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
             
-            # 绘制验证准确率曲线
-            ax2.plot(self.epochs, self.valid_accuracies, 'r-', linewidth=2, label='验证准确率')
+            # 绘制训练和验证准确率曲线
+            ax2.plot(self.epochs, self.train_accuracies, 'r-', linewidth=2, label='训练准确率')
+            ax2.plot(self.epochs, self.valid_accuracies, 'm--', linewidth=2, label='验证准确率')
             ax2.set_xlabel('轮次')
             ax2.set_ylabel('准确率')
-            ax2.set_title(f'验证准确率曲线 - 准确率: {self.max_accuracy:.4f}')
+            ax2.set_title(f'训练/验证准确率对比\n最大训练准确率: {self.max_train_accuracy:.4f}, 最大验证准确率: {self.max_valid_accuracy:.4f}')
             ax2.set_ylim(0, 1.05)  # 准确率范围0-100%
             ax2.grid(True, linestyle='--', alpha=0.7)
             ax2.legend(loc='best')
@@ -117,14 +130,34 @@ class PlotManager:
                                 color='blue',
                                 bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
                     
-                    # 标注验证准确率
-                    ax2.annotate(f'{self.valid_accuracies[i]:.4f}', 
-                                xy=(epoch, self.valid_accuracies[i]),
+                    # 标注验证损失
+                    ax1.annotate(f'{self.valid_losses[i]:.4f}', 
+                                xy=(epoch, self.valid_losses[i]),
+                                xytext=(0, -15),
+                                textcoords='offset points',
+                                ha='center',
+                                fontsize=8,
+                                color='green',
+                                bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
+                    
+                    # 标注训练准确率
+                    ax2.annotate(f'{self.train_accuracies[i]:.4f}', 
+                                xy=(epoch, self.train_accuracies[i]),
                                 xytext=(0, 5),
                                 textcoords='offset points',
                                 ha='center',
                                 fontsize=8,
                                 color='red',
+                                bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
+                    
+                    # 标注验证准确率
+                    ax2.annotate(f'{self.valid_accuracies[i]:.4f}', 
+                                xy=(epoch, self.valid_accuracies[i]),
+                                xytext=(0, -15),
+                                textcoords='offset points',
+                                ha='center',
+                                fontsize=8,
+                                color='magenta',
                                 bbox=dict(boxstyle='round,pad=0.3', fc='white', alpha=0.7))
             
             # 保存图表（覆盖已有文件）
