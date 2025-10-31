@@ -11,8 +11,7 @@ data-root = "../data/flowerclassify/train/train"
 data-label = "../data/flowerclassify/train_labels.csv"
 
 # 数据集划分比例: 验证集和测试集的比例
-valid-split-ratio = 0.2
-test-split-ratio = 0.1
+valid-split-ratio = 0.3
 
 # 测试集配置
 # 测试集CSV文件路径

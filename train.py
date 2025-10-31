@@ -5,7 +5,7 @@ import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-from data_preparation import FlowerDataset
+from data_preparation import FlowerDataset, get_augmentations  # 导入数据增强函数
 from models import FlowerNet
 from utils.logging_utils import TrainingLogger, TrainingProcessLogger  # 导入日志记录器
 from utils.optim_utils import get_loss_function, get_optimizer, get_lr_scheduler
@@ -28,25 +28,38 @@ def main():
     # 确保 training_logs 目录存在
     os.makedirs('training_logs', exist_ok=True)
     
-    # 创建训练集和验证集的变换（简化版，因为增强已在数据准备阶段完成）
-    # 只需调整大小、转换类型和归一化
-    common_transform = transforms.Compose([
-        transforms.Resize((400, 400)),  # 调整为模型输入大小
-        transforms.ConvertImageDtype(torch.float32),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+    # 获取数据增强方法，用于训练集
+    augmentation = get_augmentations()
+    
+    # 创建训练集的变换（包含基本处理）
+    train_transform = transforms.Compose([
+        # 使用RandomResizedCrop代替直接的Resize，更符合预训练模型的训练方式
+        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
+        augmentation,  # 应用单一的增强变换
+        transforms.ToTensor(),  # 转换为张量
+        # 修改为ResNet预训练模型使用的归一化参数
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+    ])
+    
+    # 创建验证集的变换（不包含增强，仅基本处理）
+    valid_transform = transforms.Compose([
+        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
+        transforms.ToTensor(),  # 转换为张量
+        # 验证集也使用相同的归一化参数
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
     
     # 直接加载已分割好的数据集
     train_dataset = FlowerDataset(
         csv_file='datasets/train_split.csv',
         img_dir='datasets/train',
-        transform=common_transform  # 使用简化的变换
+        transform=train_transform  # 直接传递单一变换
     )
     
     valid_dataset = FlowerDataset(
         csv_file='datasets/valid_split.csv',
         img_dir='datasets/valid',
-        transform=common_transform  # 使用相同的变换
+        transform=valid_transform  # 验证集不使用增强
     )
     
     # 获取类别数量和数据集大小
@@ -60,7 +73,7 @@ def main():
         train_dataset,
         batch_size=configs['batch-size'],
         num_workers=configs['num-workers'],
-        shuffle=True # 每次epoch都会打乱数据顺序 增强模型泛化能力 防止过拟合
+        shuffle=True  # 每次epoch都会打乱数据顺序 增强模型泛化能力 防止过拟合
     )
     
     valid_dataloader = DataLoader(
@@ -209,6 +222,7 @@ def main():
         print(f"使用LayerNorm层")
     # 添加激活函数信息打印
     print(f"使用激活函数: {activation_fn}")
+    print("使用动态数据增强: 每次训练时随机应用增强策略")  # 提示使用动态数据增强
     process_logger.log_training_event("training_start", f"训练开始于设备: {device}")
     
     # 训练循环
