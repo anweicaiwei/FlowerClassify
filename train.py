@@ -87,6 +87,11 @@ def main():
     best_accuracy = 0.0
     last_accuracy = 0.0
     
+    # 添加阶段性解冻相关配置
+    use_layer_wise_unfreeze = configs.get('use-layer-wise-unfreeze', False)
+    unfreeze_epochs = configs.get('unfreeze-epochs', [5, 10, 15])
+    early_fc_only = configs.get('early-fc-only', True)
+    
     # 设置设备
     device = torch.device(configs['device'])
     
@@ -200,7 +205,10 @@ def main():
         "l1_lambda": l1_lambda,
         "use_grad_clip": use_grad_clip,
         "grad_clip_value": grad_clip_value,
-        "early_stopping_patience": early_stopping_patience
+        "early_stopping_patience": early_stopping_patience,
+        "use_layer_wise_unfreeze": use_layer_wise_unfreeze,
+        "unfreeze_epochs": unfreeze_epochs,
+        "early_fc_only": early_fc_only
     })
     
     # 保存初始日志
@@ -223,10 +231,96 @@ def main():
     # 添加激活函数信息打印
     print(f"使用激活函数: {activation_fn}")
     print("使用动态数据增强: 每次训练时随机应用增强策略")  # 提示使用动态数据增强
+    
+    # 打印阶段性解冻配置信息
+    if use_layer_wise_unfreeze:
+        print(f"使用阶段性解冻策略")
+        print(f"解冻轮次配置: {unfreeze_epochs}")
+        print(f"初始阶段仅训练全连接层: {early_fc_only}")
+    
     process_logger.log_training_event("training_start", f"训练开始于设备: {device}")
+    
+    # 阶段性解冻函数定义
+    def freeze_layers(model, unfreeze_level):
+        """根据解冻级别冻结或解冻模型的不同层"""
+        # 首先冻结所有层
+        for param in model.parameters():
+            param.requires_grad = False
+        
+        if unfreeze_level == 0:
+            # 仅解冻全连接层
+            for param in model.fc1.parameters():
+                param.requires_grad = True
+            for param in model.fc2.parameters():
+                param.requires_grad = True
+            if hasattr(model, 'fc_bn'):
+                for param in model.fc_bn.parameters():
+                    param.requires_grad = True
+        elif unfreeze_level == 1:
+            # 解冻layer4和全连接层
+            for param in model.layer4.parameters():
+                param.requires_grad = True
+            for param in model.fc1.parameters():
+                param.requires_grad = True
+            for param in model.fc2.parameters():
+                param.requires_grad = True
+            if hasattr(model, 'fc_bn'):
+                for param in model.fc_bn.parameters():
+                    param.requires_grad = True
+        elif unfreeze_level == 2:
+            # 解冻layer3-4和全连接层
+            for param in model.layer3.parameters():
+                param.requires_grad = True
+            for param in model.layer4.parameters():
+                param.requires_grad = True
+            for param in model.fc1.parameters():
+                param.requires_grad = True
+            for param in model.fc2.parameters():
+                param.requires_grad = True
+            if hasattr(model, 'fc_bn'):
+                for param in model.fc_bn.parameters():
+                    param.requires_grad = True
+        elif unfreeze_level >= 3:
+            # 解冻所有层
+            for param in model.parameters():
+                param.requires_grad = True
+    
+    # 初始化阶段：如果启用了early_fc_only，则只训练全连接层
+    current_unfreeze_level = 0
+    if use_layer_wise_unfreeze and early_fc_only:
+        freeze_layers(model, current_unfreeze_level)
+        print(f"初始阶段: 仅训练全连接层")
     
     # 训练循环
     for epoch in range(configs['num-epochs']):
+        # 检查是否需要解冻更多层
+        if use_layer_wise_unfreeze and epoch in unfreeze_epochs:
+            current_unfreeze_level = unfreeze_epochs.index(epoch) + 1
+            freeze_layers(model, current_unfreeze_level)
+            print(f"\n第{epoch}轮: 解冻更多层，当前解冻级别: {current_unfreeze_level}")
+            process_logger.log_training_event("layer_unfreeze", f"第{epoch}轮: 解冻更多层，当前解冻级别: {current_unfreeze_level}")
+            
+            # 解冻层后需要重新初始化优化器以包含新解冻的参数
+            optimizer = get_optimizer(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                optimizer_type,
+                learning_rate=configs['learning-rate'],
+                weight_decay=configs['weight-decay'],
+                l1_lambda=l1_lambda if l1_lambda > 0 else None
+            )
+            
+            # 同时重新创建学习率调度器
+            scheduler = get_lr_scheduler(
+                optimizer,
+                scheduler_type,
+                step_size=configs.get('lr-scheduler-step-size', 10),
+                gamma=configs.get('lr-scheduler-gamma', 0.5),
+                T_max=configs.get('num-epochs', 100),
+                eta_min=configs['learning-rate'] * 0.01,
+                warmup_epochs=0,  # 解冻时不再需要预热
+                warmup_type=warmup_type
+            )
+            
         model.train()
         epoch_loss = 0.0
         train_correct = 0

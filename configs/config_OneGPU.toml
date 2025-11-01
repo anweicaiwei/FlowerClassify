@@ -29,7 +29,7 @@ custom-output-path = "checkpoints/OneGPU/20251025_071825/predictions.csv"
 model-name = "resnet34"
 
 # 批次大小：每次训练迭代使用的样本数量，影响训练速度和内存占用
-batch-size = 256  # 根据GPU内存情况可适当调整
+batch-size = 32  # 根据GPU内存情况可适当调整
 
 # 训练轮次：整个数据集训练的次数
 num-epochs = 100
@@ -38,7 +38,7 @@ num-epochs = 100
 num-workers = 20
 
 # 类别数量：花卉分类任务中的类别总数
-num-classes = 0
+num-classes = 100
 
 # 日志打印间隔：每训练多少个批次打印一次日志
 log-interval = 10
@@ -83,8 +83,8 @@ lr-scheduler-step-size = 10
 # 学习率调度器衰减率：学习率调整的比例
 lr-scheduler-gamma = 0.5
 
-warmup_epochs = 3         # 预热轮数
-warmup_type = "cosine"     # 预热类型：linear或cosine
+warmup_epochs = 5        # 预热轮数
+warmup_type = "linear"     # 预热类型：linear或cosine
 
 # 早停机制耐心值：连续多少个epoch无性能提升后停止训练
 early-stopping-patience = 10
@@ -97,4 +97,9 @@ use-grad-clip = true        # 是否使用梯度裁剪
 grad-clip-value = 1.0       # 梯度裁剪阈值
 
 # 激活函数配置，可选值：'gelu', 'swish', 'mish', 'leaky_relu', 'relu'
-activation-fn = 'gelu'
+activation-fn = 'relu'
+
+# 阶段性解冻配置
+use-layer-wise-unfreeze = true  # 是否使用阶段性解冻
+unfreeze-epochs = [5, 10, 15]   # 解冻不同层的训练轮次
+early-fc-only = true           # 初始阶段是否只训练全连接层
