@@ -1,170 +1,112 @@
+import json
 import os
 from datetime import datetime
 
+import toml
 import torch
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
+from utils import FlowerDataset, get_augmentations  # 导入数据增强函数
 from model import FlowerNet
-from utils import get_loss_function, get_optimizer, get_lr_scheduler, get_train_valid_datasets
-
-# 添加Mixup数据增强
-class MixupDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset, alpha=0.8):
-        self.dataset = dataset
-        self.alpha = alpha
-        self.num_classes = dataset.num_classes
-        
-    def __len__(self):
-        return len(self.dataset)
-    
-    def __getitem__(self, index):
-        img1, label1 = self.dataset[index]
-        # 随机选择第二个样本
-        index2 = torch.randint(0, len(self.dataset), (1,)).item()
-        img2, label2 = self.dataset[index2]
-        
-        # 生成mixup系数
-        if self.alpha > 0:
-            lam = torch.distributions.Beta(self.alpha, self.alpha).sample().item()
-        else:
-            lam = 1.0
-        
-        # mixup图像和标签
-        mixed_img = lam * img1 + (1 - lam) * img2
-        
-        # 返回混合后的图像和原始标签
-        return mixed_img, label1, label2, lam
-
-# 渐进式训练类
-class ProgressiveTraining:
-    def __init__(self, model, configs):
-        self.model = model
-        self.configs = configs
-        self.current_stage = 0
-        self.stage_epochs = configs.get('stage_epochs', [10, 15, 20])  # 分阶段训练的轮数
-        self.freeze_layers = configs.get('freeze_layers', True)  # 是否冻结低层
-    
-    def update_stage(self, epoch):
-        # 计算当前阶段
-        total_epochs = 0
-        for i, stage_epoch in enumerate(self.stage_epochs):
-            total_epochs += stage_epoch
-            if epoch < total_epochs:
-                new_stage = i
-                break
-        else:
-            new_stage = len(self.stage_epochs) - 1
-        
-        # 如果进入新阶段，更新模型训练策略
-        if new_stage != self.current_stage:
-            self.current_stage = new_stage
-            self._update_model_training_status()
-            print(f"进入训练阶段 {new_stage+1}/{len(self.stage_epochs)}")
-    
-    def _update_model_training_status(self):
-        # 根据不同阶段解冻不同数量的层
-        if not self.freeze_layers:
-            return
-        
-        # 渐进式解冻模型层
-        if self.current_stage == 0:
-            # 第一阶段：只训练分类头
-            for param in self.model.conv1.parameters():
-                param.requires_grad = False
-            for param in self.model.layer1.parameters():
-                param.requires_grad = False
-            for param in self.model.layer2.parameters():
-                param.requires_grad = False
-            for param in self.model.layer3.parameters():
-                param.requires_grad = False
-            # 只训练layer4和分类头
-        elif self.current_stage == 1:
-            # 第二阶段：训练layer3、layer4和分类头
-            for param in self.model.conv1.parameters():
-                param.requires_grad = False
-            for param in self.model.layer1.parameters():
-                param.requires_grad = False
-            for param in self.model.layer2.parameters():
-                param.requires_grad = False
-        else:
-            # 第三阶段：训练所有层
-            for param in self.model.parameters():
-                param.requires_grad = True
+from utils import get_loss_function, get_optimizer, get_lr_scheduler
 
 def main():
     """主函数，执行模型训练"""
+    # 加载配置
     configs = {
-        # "device": "cuda",
+        "device": "cuda",
         "data-root": "../data/flowerclassify/train/train",
         "data-label": "../data/flowerclassify/train_labels.csv",
-        "valid-split-ratio": 0.15,
-        "test-split-ratio": 0.15,
+        "valid-split-ratio": 0.3,
         "test-csv-file": "datasets/test_split.csv",
         "test-img-dir": "datasets/test",
-        "custom-model-params-path": "../model/best-model.pt",
+        "custom-model-params-path": "checkpoints/OneGPU/20251025_071825/best-model.pt",
         "custom-output-path": "checkpoints/OneGPU/20251025_071825/predictions.csv",
-        "model-name": "resnet50",
-        "batch-size": 64,
+        "model-name": "resnet34",
+        "batch-size": 32,
         "num-epochs": 100,
         "num-workers": 20,
         "num-classes": 100,
         "log-interval": 10,
         "load-checkpoint": False,
         "load-pretrained": True,
-        "load-checkpoint-path": "checkpoints/best-ckpt.pt",
-        "loss-function": "label_smoothing_cross_entropy",
-        "learning-rate": 0.00005,
-        "weight-decay": 0.0005,
-        "optimizer-type": "adamw",
+        "load-checkpoint-path": "checkpoints/best-model.pt",
+        "loss-function": "cross_entropy",
+        "learning-rate": 5e-05,
+        "weight-decay": 0.0001,
+        "optimizer-type": "adam",
         "lr-scheduler-type": "cosine_warm_restarts",
         "lr-scheduler-step-size": 10,
         "lr-scheduler-gamma": 0.5,
         "warmup_epochs": 5,
-        "warmup_type": "cosine",
+        "warmup_type": "linear",
         "early-stopping-patience": 10,
-        "l1-lambda": 0.0000005,
+        "l1-lambda": 0.0,
         "use-layer-norm": True,
         "use-grad-clip": True,
         "grad-clip-value": 1.0,
-        "activation-fn": "gelu",
-        "use-mixup": True,
-        "mixup-alpha": 0.8,
-        "stage_epochs": [10, 15, 20],
-        "freeze_layers": True
+        "activation-fn": "relu",
+        "use-layer-wise-unfreeze": True,
+        "unfreeze-epochs": [
+            5,
+            10,
+            15
+        ],
+        "early-fc-only": True
     }
     
-    # 创建训练集和验证集的变换
+    # 尝试从 config.toml 加载配置，如果存在则覆盖默认配置
+    config_path = "config.toml"
+    if os.path.exists(config_path):
+        try:
+            configs.update(toml.load(config_path))
+            print(f"成功从 {config_path} 加载配置")
+        except Exception as e:
+            print(f"加载配置文件失败: {e}")
+            print("使用默认配置继续")
+    else:
+        print(f"配置文件 {config_path} 不存在，使用默认配置")
+    
+    # 生成时间戳用于checkpoint目录
+    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    # 获取数据增强方法，用于训练集
+    augmentation = get_augmentations()
+    
+    # 创建训练集的变换（包含基本处理）
     train_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ColorJitter(0.1, 0.1, 0.1),
-        # transforms.RandomRotation(10),
-        transforms.RandomHorizontalFlip(),
-        transforms.ConvertImageDtype(torch.float32),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        transforms.RandomErasing(),
+        # 使用RandomResizedCrop代替直接的Resize，更符合预训练模型的训练方式
+        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
+        augmentation,  # 应用单一的增强变换
+        transforms.ToTensor(),  # 转换为张量
+        # 修改为ResNet预训练模型使用的归一化参数
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
     
+    # 创建验证集的变换（不包含增强，仅基本处理）
     valid_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ConvertImageDtype(torch.float32),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
+        transforms.ToTensor(),  # 转换为张量
+        # 验证集也使用相同的归一化参数
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
     
-    # 使用utils.py中的函数直接创建并划分训练集和验证集
-    train_dataset, valid_dataset, category_to_idx, num_classes = get_train_valid_datasets(
-        csv_file=configs['data-label'],
-        img_dir=configs['data-root'],
-        valid_ratio=configs['valid-split-ratio'],
-        transform=train_transform  # 为了简单起见，对训练集和验证集使用相同的变换
+    # 直接加载已分割好的数据集
+    train_dataset = FlowerDataset(
+        csv_file='datasets/train_split.csv',
+        img_dir='datasets/train',
+        transform=train_transform  # 直接传递单一变换
     )
     
-    # 如果启用Mixup数据增强
-    if configs.get('use-mixup', False):
-        train_dataset = MixupDataset(train_dataset, alpha=configs.get('mixup-alpha', 0.8))
-        print(f"使用Mixup数据增强，alpha值: {configs.get('mixup-alpha', 0.8)}")
+    valid_dataset = FlowerDataset(
+        csv_file='datasets/valid_split.csv',
+        img_dir='datasets/valid',
+        transform=valid_transform  # 验证集不使用增强
+    )
     
-    # 获取数据集大小
+    # 获取类别数量和数据集大小
+    num_classes = train_dataset.num_classes
     configs['num-classes'] = num_classes
     train_dataset_size = len(train_dataset)
     valid_dataset_size = len(valid_dataset)
@@ -174,7 +116,7 @@ def main():
         train_dataset,
         batch_size=configs['batch-size'],
         num_workers=configs['num-workers'],
-        shuffle=True
+        shuffle=True  # 每次epoch都会打乱数据顺序 增强模型泛化能力 防止过拟合
     )
     
     valid_dataloader = DataLoader(
@@ -188,54 +130,61 @@ def main():
     best_accuracy = 0.0
     last_accuracy = 0.0
     
+    # 添加阶段性解冻相关配置
+    use_layer_wise_unfreeze = configs.get('use-layer-wise-unfreeze', False)
+    unfreeze_epochs = configs.get('unfreeze-epochs', [5, 10, 15])
+    early_fc_only = configs.get('early-fc-only', True)
+    
     # 设置设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device(configs['device'])
     
     # 初始化模型
-    use_layer_norm = configs['use-layer-norm']
+    use_layer_norm = configs.get('use-layer-norm', False)
+    # 获取激活函数配置，默认为gelu
     activation_fn = configs.get('activation-fn', 'gelu')
     
     model = FlowerNet(
-        num_classes=num_classes, 
-        pretrained=configs['load-pretrained'], 
+        num_classes=num_classes,
+        pretrained=configs['load-pretrained'],
         model_name=configs['model-name'],
         use_layer_norm=use_layer_norm,
         activation_fn=activation_fn
     )
     model = model.to(device)
     
-    # 获取损失函数
-    loss_function_type = configs['loss-function']
+    # 从配置文件读取损失函数类型并获取损失函数
+    loss_function_type = configs.get('loss-function', 'cross_entropy')
     criterion = get_loss_function(loss_function_type)
     l1_lambda = 0
     
     # 如果是L1正则化损失，设置模型
     if loss_function_type == 'l1_regularized_cross_entropy':
         criterion = criterion.set_model(model)
-        l1_lambda = configs['l1-lambda']
+        l1_lambda = configs.get('l1-lambda', 0.001)
         criterion = criterion.set_l1_lambda(l1_lambda)
     
-    # 获取优化器
-    optimizer_type = configs['optimizer-type']
+    # 从配置文件读取优化器类型并获取优化器
+    optimizer_type = configs.get('optimizer-type', 'adam')
     optimizer = get_optimizer(
-        model,
+        model.parameters(),  # 修改这里，传递参数迭代器而不是整个模型
         optimizer_type,
         learning_rate=configs['learning-rate'],
         weight_decay=configs['weight-decay'],
         l1_lambda=l1_lambda if l1_lambda > 0 else None
     )
     
+    # 添加学习率调度器
+    scheduler_type = configs.get('lr-scheduler-type', 'step')
     # 获取预热相关参数
     warmup_epochs = configs.get('warmup_epochs', 0)
     warmup_type = configs.get('warmup_type', 'linear')
     
-    # 添加学习率调度器
-    scheduler_type = configs['lr-scheduler-type']
+    # 创建学习率调度器时传递预热参数
     scheduler = get_lr_scheduler(
         optimizer,
         scheduler_type,
-        step_size=configs['lr-scheduler-step-size'],
-        gamma=configs['lr-scheduler-gamma'],
+        step_size=configs.get('lr-scheduler-step-size', 10),
+        gamma=configs.get('lr-scheduler-gamma', 0.5),
         T_max=configs.get('num-epochs', 100),  # 余弦退火调度器需要的T_max参数
         eta_min=configs['learning-rate'] * 0.01,
         warmup_epochs=warmup_epochs,
@@ -243,20 +192,19 @@ def main():
     )
     
     # 早停机制相关参数
-    early_stopping_patience = configs['early-stopping-patience']
+    early_stopping_patience = configs.get('early-stopping-patience', 15)
     early_stopping_counter = 0
     
     # 梯度裁剪参数
-    use_grad_clip = configs['use-grad-clip']
-    grad_clip_value = configs['grad-clip-value']
+    use_grad_clip = configs.get('use-grad-clip', False)
+    grad_clip_value = configs.get('grad-clip-value', 1.0)
     
     # 创建基于时间戳的checkpoint目录
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     checkpoints_dir = os.path.join('checkpoints', 'OneGPU', timestamp)
     os.makedirs(checkpoints_dir, exist_ok=True)
     print(f"检查点将保存至目录: {checkpoints_dir}")
     
-    # 设置检查点路径
+    # 使用配置中的文件名，但保存路径改为基于时间戳的目录
     load_checkpoint_path = configs['load-checkpoint-path']
     best_checkpoint_path = os.path.join(checkpoints_dir, 'best-model.pt')
     last_checkpoint_path = os.path.join(checkpoints_dir, 'last-ckpt.pt')
@@ -278,6 +226,7 @@ def main():
     print(f'\n---------- training start at: {device} ----------\n')
     print(f"损失函数: {loss_function_type}")
     print(f"优化器: {optimizer_type}")
+    # 在日志记录部分添加预热参数信息
     print(f"学习率调度器: {scheduler_type}")
     if warmup_epochs > 0:
         print(f"使用学习率预热: {warmup_type}方式，预热轮数: {warmup_epochs}")
@@ -288,43 +237,108 @@ def main():
         print(f"使用梯度裁剪，阈值: {grad_clip_value}")
     if use_layer_norm:
         print(f"使用LayerNorm层")
+    # 添加激活函数信息打印
     print(f"使用激活函数: {activation_fn}")
-    if configs.get('freeze_layers', False):
-        print(f"使用渐进式训练，阶段划分: {configs.get('stage_epochs', [10, 15, 20])}个epoch")
+    print("使用动态数据增强: 每次训练时随机应用增强策略")  # 提示使用动态数据增强
     
-    # 初始化渐进式训练
-    progressive_trainer = ProgressiveTraining(model, configs)
+    # 打印阶段性解冻配置信息
+    if use_layer_wise_unfreeze:
+        print(f"使用阶段性解冻策略")
+        print(f"解冻轮次配置: {unfreeze_epochs}")
+        print(f"初始阶段仅训练全连接层: {early_fc_only}")
+    
+    # 阶段性解冻函数定义
+    def freeze_layers(model, unfreeze_level):
+        """根据解冻级别冻结或解冻模型的不同层"""
+        # 首先冻结所有层
+        for param in model.parameters():
+            param.requires_grad = False
+        
+        if unfreeze_level == 0:
+            # 仅解冻全连接层
+            for param in model.fc1.parameters():
+                param.requires_grad = True
+            for param in model.fc2.parameters():
+                param.requires_grad = True
+            if hasattr(model, 'fc_bn'):
+                for param in model.fc_bn.parameters():
+                    param.requires_grad = True
+        elif unfreeze_level == 1:
+            # 解冻layer4和全连接层
+            for param in model.layer4.parameters():
+                param.requires_grad = True
+            for param in model.fc1.parameters():
+                param.requires_grad = True
+            for param in model.fc2.parameters():
+                param.requires_grad = True
+            if hasattr(model, 'fc_bn'):
+                for param in model.fc_bn.parameters():
+                    param.requires_grad = True
+        elif unfreeze_level == 2:
+            # 解冻layer3-4和全连接层
+            for param in model.layer3.parameters():
+                param.requires_grad = True
+            for param in model.layer4.parameters():
+                param.requires_grad = True
+            for param in model.fc1.parameters():
+                param.requires_grad = True
+            for param in model.fc2.parameters():
+                param.requires_grad = True
+            if hasattr(model, 'fc_bn'):
+                for param in model.fc_bn.parameters():
+                    param.requires_grad = True
+        elif unfreeze_level >= 3:
+            # 解冻所有层
+            for param in model.parameters():
+                param.requires_grad = True
+    
+    # 初始化阶段：如果启用了early_fc_only，则只训练全连接层
+    current_unfreeze_level = 0
+    if use_layer_wise_unfreeze and early_fc_only:
+        freeze_layers(model, current_unfreeze_level)
+        print(f"初始阶段: 仅训练全连接层")
     
     # 训练循环
     for epoch in range(configs['num-epochs']):
-        # 更新训练阶段
-        progressive_trainer.update_stage(epoch)
+        # 检查是否需要解冻更多层
+        if use_layer_wise_unfreeze and epoch in unfreeze_epochs:
+            current_unfreeze_level = unfreeze_epochs.index(epoch) + 1
+            freeze_layers(model, current_unfreeze_level)
+            print(f"\n第{epoch}轮: 解冻更多层，当前解冻级别: {current_unfreeze_level}")
+            
+            # 解冻层后需要重新初始化优化器以包含新解冻的参数
+            optimizer = get_optimizer(
+                filter(lambda p: p.requires_grad, model.parameters()),
+                optimizer_type,
+                learning_rate=configs['learning-rate'],
+                weight_decay=configs['weight-decay'],
+                l1_lambda=l1_lambda if l1_lambda > 0 else None
+            )
+            
+            # 同时重新创建学习率调度器
+            scheduler = get_lr_scheduler(
+                optimizer,
+                scheduler_type,
+                step_size=configs.get('lr-scheduler-step-size', 10),
+                gamma=configs.get('lr-scheduler-gamma', 0.5),
+                T_max=configs.get('num-epochs', 100),
+                eta_min=configs['learning-rate'] * 0.01,
+                warmup_epochs=0,  # 解冻时不再需要预热
+                warmup_type=warmup_type
+            )
         
         model.train()
         epoch_loss = 0.0
+        train_correct = 0
+        train_total = 0
         
-        for batch, data in enumerate(train_dataloader, start=1):
-            # 处理普通批次和Mixup批次
-            if len(data) == 4:  # Mixup批次有4个元素
-                images, labels1, labels2, lam = data
-                images = images.to(device)
-                labels1 = labels1.to(device)
-                labels2 = labels2.to(device)
-                lam = lam.to(device)
-            else:  # 普通批次有2个元素
-                images, labels = data
-                images = images.to(device)
-                labels = labels.to(device)
+        for batch, (images, labels) in enumerate(train_dataloader, start=1):
+            images = images.to(device)
+            labels = labels.to(device)
             
             optimizer.zero_grad()
             outputs = model(images)
-            
-            # 计算损失
-            if len(data) == 4:  # Mixup损失计算
-                loss = lam * criterion(outputs, labels1) + (1 - lam) * criterion(outputs, labels2)
-            else:  # 普通损失计算
-                loss = criterion(outputs, labels)
-            
+            loss = criterion(outputs, labels)
             loss.backward()
             
             # 可选的梯度裁剪
@@ -334,35 +348,52 @@ def main():
             optimizer.step()
             epoch_loss += loss.item()
             
+            # 计算训练准确率
+            _, predicted = torch.max(outputs.data, 1)
+            train_total += labels.size(0)
+            train_correct += (predicted == labels).sum().item()
+            
             # 记录训练批次信息
             if batch % log_interval == 0:
-                print(f'[train] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(train_dataloader):04d}] loss: {loss.item():.5f}')
+                print(
+                    f'[train] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(train_dataloader):04d}] loss: {loss.item():.5f}')
         
-        # 计算当前epoch的平均损失
+        # 计算当前epoch的平均损失和训练准确率
         avg_epoch_loss = epoch_loss / len(train_dataloader)
+        train_accuracy = train_correct / train_total
         
-        # 更新学习率
+        # 更新学习率（在验证前更新，符合PyTorch推荐实践）
         scheduler.step()
         
         # 验证循环
         model.eval()
         with torch.no_grad():
-            accuracy = 0.0
+            valid_correct = 0
+            valid_total = 0
+            valid_loss = 0.0
             for batch, (images, labels) in enumerate(valid_dataloader, start=1):
                 images = images.to(device)
                 labels = labels.to(device)
                 outputs = model(images)
-                accuracy += (torch.argmax(outputs, dim=1) == labels).sum().item()
+                loss = criterion(outputs, labels)
+                valid_loss += loss.item()
+                
+                # 计算验证准确率
+                _, predicted = torch.max(outputs.data, 1)
+                valid_total += labels.size(0)
+                valid_correct += (predicted == labels).sum().item()
                 
                 # 记录验证批次信息
                 if batch % log_interval == 0:
-                    print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(valid_dataloader):04d}]')
+                    print(
+                        f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] [{batch:04d}/{len(valid_dataloader):04d}]')
             
-            accuracy /= valid_dataset_size
+            valid_accuracy = valid_correct / valid_total
+            avg_valid_loss = valid_loss / len(valid_dataloader)
             
             # 保存最佳模型
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
+            if valid_accuracy > best_accuracy:
+                best_accuracy = valid_accuracy
                 torch.save(model.state_dict(), best_checkpoint_path)
                 print(f"新的最佳模型已保存: {best_checkpoint_path}")
                 early_stopping_counter = 0
@@ -371,20 +402,21 @@ def main():
                 print(f"早停计数器: {early_stopping_counter}/{early_stopping_patience}")
             
             # 保存最新模型
-            last_accuracy = accuracy
+            last_accuracy = valid_accuracy
             torch.save(model.state_dict(), last_checkpoint_path)
-
-        # 保存类别映射文件（在第一个epoch结束后保存一次即可）
-        if epoch == 0:
-            category_map_path = os.path.join(checkpoints_dir, 'category_mapping.json')
-            import json
-            category_mapping = {int(k): v for k, v in train_dataset.category_to_idx.items()}
-            with open(category_map_path, 'w') as f:
-                json.dump(category_mapping, f)
-            print(f"类别映射已保存至: {category_map_path}")
-
-        print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {accuracy:.4f}')
+            
+            # 保存类别映射文件（在第一个epoch结束后保存一次即可）
+            if epoch == 0:
+                category_map_path = os.path.join(checkpoints_dir, 'category_mapping.json')
+                category_mapping = {int(k): v for k, v in train_dataset.category_to_idx.items()}
+                with open(category_map_path, 'w') as f:
+                    json.dump(category_mapping, f)
+                print(f"类别映射已保存至: {category_map_path}")
+        
+        print(f'[valid] [{epoch:03d}/{configs["num-epochs"]:03d}] accuracy: {valid_accuracy:.4f}')
         print(f'当前学习率: {optimizer.param_groups[0]["lr"]:.8f}')
+        print(f'训练准确率: {train_accuracy:.4f}, 训练损失: {avg_epoch_loss:.5f}')
+        print(f'验证准确率: {valid_accuracy:.4f}, 验证损失: {avg_valid_loss:.5f}')
         
         # 检查早停条件
         if early_stopping_counter >= early_stopping_patience:
@@ -393,7 +425,6 @@ def main():
     
     print(f'best accuracy: {best_accuracy:.3f}')
     print(f'last accuracy: {last_accuracy:.3f}')
-    
     print('\n---------- training finished ----------\n')
 
 

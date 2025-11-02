@@ -15,43 +15,45 @@ from utils import get_test_dataset
 def main():
     """主函数，执行模型预测（无标签推理）"""
     configs = {
-        # "device": "cuda",
+        "device": "cuda",
         "data-root": "../data/flowerclassify/train/train",
         "data-label": "../data/flowerclassify/train_labels.csv",
-        "valid-split-ratio": 0.15,
-        "test-split-ratio": 0.15,
+        "valid-split-ratio": 0.3,
         "test-csv-file": "datasets/test_split.csv",
         "test-img-dir": "datasets/test",
         "custom-model-params-path": "../model/best-model.pt",
         "custom-output-path": "../results/submission.csv",
-        "model-name": "resnet50",
-        "batch-size": 64,
+        "model-name": "resnet34",
+        "batch-size": 32,
         "num-epochs": 100,
         "num-workers": 20,
         "num-classes": 100,
         "log-interval": 10,
         "load-checkpoint": False,
         "load-pretrained": False,
-        "load-checkpoint-path": "checkpoints/best-ckpt.pt",
-        "loss-function": "label_smoothing_cross_entropy",
-        "learning-rate": 0.00005,
-        "weight-decay": 0.0005,
-        "optimizer-type": "adamw",
+        "load-checkpoint-path": "checkpoints/best-model.pt",
+        "loss-function": "cross_entropy",
+        "learning-rate": 5e-05,
+        "weight-decay": 0.0001,
+        "optimizer-type": "adam",
         "lr-scheduler-type": "cosine_warm_restarts",
         "lr-scheduler-step-size": 10,
         "lr-scheduler-gamma": 0.5,
         "warmup_epochs": 5,
-        "warmup_type": "cosine",
+        "warmup_type": "linear",
         "early-stopping-patience": 10,
-        "l1-lambda": 0.0000005,
+        "l1-lambda": 0.0,
         "use-layer-norm": True,
         "use-grad-clip": True,
         "grad-clip-value": 1.0,
-        "activation-fn": "gelu",
-        "use-mixup": True,
-        "mixup-alpha": 0.8,
-        "stage_epochs": [10, 15, 20],
-        "freeze_layers": True
+        "activation-fn": "relu",
+        "use-layer-wise-unfreeze": True,
+        "unfreeze-epochs": [
+            5,
+            10,
+            15
+        ],
+        "early-fc-only": True
     }
 
     # 解析命令行参数
@@ -65,14 +67,14 @@ def main():
 
     # 创建测试集的变换
     test_transform = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ConvertImageDtype(torch.float32),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
+        transforms.ToTensor(),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
 
     # 创建无标签测试集
-    test_dataset = get_test_dataset(test_img_dir=test_img_dir, transform=test_transform)
-    
+    test_dataset = get_test_dataset(test_dir=test_img_dir, transform=test_transform)
+
     if test_dataset is None:
         sys.exit(1)
 
@@ -91,14 +93,14 @@ def main():
 
     # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
+
     # 获取激活函数配置，默认为gelu
     activation_fn = configs.get('activation-fn', 'gelu')
 
     # 初始化模型 - 使用configs中的参数
     model = FlowerNet(
         num_classes=configs["num-classes"],  # 使用configs中的类别数
-        pretrained=configs["load-pretrained"],  # 使用预训练权重
+        pretrained=False,  # 使用预训练权重
         model_name=configs["model-name"],  # 使用configs中的模型架构
         use_layer_norm=configs["use-layer-norm"],  # 使用configs中的LayerNorm配置
         activation_fn=activation_fn  # 添加激活函数参数
@@ -122,7 +124,7 @@ def main():
 
     # 类别映射
     category_to_idx = {"164": 0, "165": 1, "166": 2, "167": 3, "169": 4, "171": 5, "172": 6, "173": 7, "174": 8, "176": 9, "177": 10, "178": 11, "179": 12, "180": 13, "183": 14, "184": 15, "185": 16, "186": 17, "188": 18, "189": 19, "190": 20, "192": 21, "193": 22, "194": 23, "195": 24, "197": 25, "198": 26, "199": 27, "200": 28, "201": 29, "202": 30, "203": 31, "204": 32, "205": 33, "206": 34, "207": 35, "208": 36, "209": 37, "210": 38, "211": 39, "212": 40, "213": 41, "214": 42, "215": 43, "216": 44, "217": 45, "218": 46, "220": 47, "221": 48, "222": 49, "223": 50, "224": 51, "225": 52, "226": 53, "227": 54, "228": 55, "229": 56, "230": 57, "231": 58, "232": 59, "233": 60, "234": 61, "235": 62, "236": 63, "237": 64, "238": 65, "239": 66, "240": 67, "241": 68, "242": 69, "243": 70, "244": 71, "245": 72, "1734": 73, "1743": 74, "1747": 75, "1749": 76, "1750": 77, "1751": 78, "1759": 79, "1765": 80, "1770": 81, "1772": 82, "1774": 83, "1776": 84, "1777": 85, "1780": 86, "1784": 87, "1785": 88, "1786": 89, "1789": 90, "1796": 91, "1797": 92, "1801": 93, "1805": 94, "1806": 95, "1808": 96, "1818": 97, "1827": 98, "1833": 99}
-    
+
     # 创建反向映射：从索引映射回原始类别ID
     idx_to_category = {int(v): k for k, v in category_to_idx.items()}
 
@@ -140,7 +142,7 @@ def main():
             sys.exit(1)
 
         # 处理无标签数据
-        for batch, (images, _, filenames) in enumerate(dataloader, start=1):
+        for batch, (images, filenames) in enumerate(dataloader, start=1):
             images = images.to(device)
             outputs = model(images)
 
