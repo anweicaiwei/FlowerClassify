@@ -24,20 +24,36 @@ def main():
     augmentation = get_augmentations()
 
     # 创建训练集的变换（包含基本处理）
+    # 改进数据增强策略
+    # 修改训练集数据增强
+    valid_size = 400
+
+    # 定义训练集变换
+    color_jitter = transforms.ColorJitter(
+        brightness=0.4,
+        contrast=0.4,
+        saturation=0.4,
+        hue=0.1
+    )
+
     train_transform = transforms.Compose([
-        # 使用RandomResizedCrop代替直接的Resize，更符合预训练模型的训练方式
-        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
-        augmentation,  # 应用单一的增强变换
-        transforms.ToTensor(),  # 转换为张量
-        # 修改为ResNet预训练模型使用的归一化参数
+        transforms.RandomResizedCrop(valid_size, scale=(0.7, 1.0)),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomVerticalFlip(p=0.2),
+        transforms.RandomRotation(degrees=30),
+        transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
+        transforms.RandomApply([color_jitter], p=0.8),
+        transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        # 添加随机擦除增强
+        transforms.RandomErasing(p=0.3, scale=(0.02, 0.33), ratio=(0.3, 3.3))
     ])
 
-    # 创建验证集的变换（不包含增强，仅基本处理）
+    # 定义验证集变换
     valid_transform = transforms.Compose([
-        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
-        transforms.ToTensor(),  # 转换为张量
-        # 验证集也使用相同的归一化参数
+        transforms.Resize((valid_size, valid_size)),
+        transforms.CenterCrop(valid_size),  # 确保图像大小一致
+        transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
 
@@ -141,7 +157,14 @@ def main():
     )
 
     # 早停机制相关参数
-    early_stopping_patience = configs.get('early-stopping-patience', 15)
+    # 修改早停参数
+    # 针对CosineAnnealingWarmRestarts的推荐值
+    if scheduler_type == 'cosine_warm_restarts':
+        # 设置更大的早停轮数，至少为T_0*2
+        T_0 = 10
+        early_stopping_patience = max(30, T_0 * 3)  # 至少30轮，或T_0的3倍
+    else:
+        early_stopping_patience = configs.get('early-stopping-patience', 15)
     early_stopping_counter = 0
 
     # 梯度裁剪参数
@@ -155,7 +178,7 @@ def main():
 
     # 使用配置中的文件名，但保存路径改为基于时间戳的目录
     load_checkpoint_path = configs['load-checkpoint-path']
-    best_checkpoint_path = os.path.join(checkpoints_dir, 'best-ckpt.pt')
+    best_checkpoint_path = os.path.join(checkpoints_dir, 'best_model.pt')
     last_checkpoint_path = os.path.join(checkpoints_dir, 'last-ckpt.pt')
 
     # 确保目录存在

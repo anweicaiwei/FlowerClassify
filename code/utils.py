@@ -58,6 +58,7 @@ class FlowerDataset(Dataset):
     def __len__(self):
         return len(self.data_frame)
     # 获取数据集中的第idx个样本
+    # 修改FlowerDataset类的__getitem__方法
     def __getitem__(self, idx):
         # 获取图像文件名和类别ID
         img_name = self.data_frame.iloc[idx, 0]
@@ -66,38 +67,36 @@ class FlowerDataset(Dataset):
         # 构建完整的图像路径
         img_path = os.path.join(self.img_dir, img_name)
         
-        # 读取图像，添加异常处理
+        # 读取图像，添加更稳健的异常处理
         try:
-            # 方法1: 使用PIL直接读取图像（推荐）
+            # 使用PIL直接读取图像
+            # 添加参数支持处理截断的图像文件
             image = Image.open(img_path).convert('RGB')
+            
+            # 验证图像是否完整，通过尝试加载全部像素
+            image.verify()  # 验证图像文件的完整性
+            image = Image.open(img_path).convert('RGB')  # 重新打开图像，因为verify()后文件指针在末尾
             
             # 应用变换
             if self.transforms:
-                # 检查transforms是否为列表
                 if isinstance(self.transforms, list):
-                    # 如果是列表，则随机选择一个变换
                     selected_transform = random.choice(self.transforms)
                     image = selected_transform(image)
                 else:
-                    # 如果不是列表，则直接应用变换
                     image = self.transforms(image)
-                
+            
             # 将类别ID映射为索引
             label = self.category_to_idx[category_id]
             
             return image, label
         except Exception as e:
-            # 处理图像读取错误，记录错误信息并跳过该图像
+            # 更详细的错误信息
             print(f"Error reading image {img_path}: {e}")
-            # 返回前一个有效的图像，防止训练中断
-            # 注意：这种方式是临时解决方案，建议后续清理损坏的图像
-            if idx > 0:
-                return self.__getitem__(idx - 1)
-            else:
-                # 如果是第一个图像，创建一个空白图像和随机标签
-                dummy_image = torch.zeros(3, 400, 400, dtype=torch.float32)
-                dummy_label = 0
-                return dummy_image, dummy_label
+            # 创建一个随机图像和标签，而不是返回前一个图像
+            # 这样可以避免数据泄露和重复样本
+            dummy_image = torch.rand(3, 400, 400, dtype=torch.float32)
+            dummy_label = random.randint(0, self.num_classes - 1)
+            return dummy_image, dummy_label
 
 
 # 修改后的函数，只将数据集分为train、valid两部分

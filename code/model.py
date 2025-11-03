@@ -46,6 +46,9 @@ class FlowerNet(nn.Module):
         elif activation_fn == 'leaky_relu':
             # LeakyReLU激活函数: max(0, x) + negative_slope * min(0, x)
             self.relu = nn.LeakyReLU(negative_slope=0.1)
+        elif activation_fn == 'relu':
+            # 标准ReLU激活函数
+            self.relu = nn.ReLU()
         else:
             # 默认为ReLU
             self.relu = resnet.relu
@@ -72,11 +75,16 @@ class FlowerNet(nn.Module):
         if self.use_layer_norm:
             self.layer_norm = nn.LayerNorm(feature_dim)
 
-        # 全连接分类层，使用两层结构增强分类能力
-        self.fc1 = nn.Linear(in_features=feature_dim, out_features=512)
-        self.fc_bn = nn.BatchNorm1d(512)
-        self.fc_relu = nn.ReLU()
-        self.fc2 = nn.Linear(in_features=512, out_features=num_classes)
+        # 增强分类头，增加一个全连接层
+        self.fc1 = nn.Linear(in_features=feature_dim, out_features=1024)
+        self.fc_bn1 = nn.BatchNorm1d(1024)
+        self.fc_relu1 = nn.ReLU()
+
+        self.fc2 = nn.Linear(in_features=1024, out_features=512)
+        self.fc_bn2 = nn.BatchNorm1d(512)
+        self.fc_relu2 = nn.ReLU()
+
+        self.fc3 = nn.Linear(in_features=512, out_features=num_classes)
 
     def forward(self, inputs):
         # 主干特征提取
@@ -93,7 +101,7 @@ class FlowerNet(nn.Module):
         # 池化和扁平化
         outputs = self.avgpool(outputs)
         outputs = self.flatten(outputs)
-        
+
         # 可选的LayerNorm
         if self.use_layer_norm:
             outputs = self.layer_norm(outputs)
@@ -101,9 +109,15 @@ class FlowerNet(nn.Module):
         # 分类层，带Dropout防止过拟合
         outputs = self.dropout(outputs)
         outputs = self.fc1(outputs)
-        outputs = self.fc_bn(outputs)
-        outputs = self.fc_relu(outputs)
+        outputs = self.fc_bn1(outputs)
+        outputs = self.fc_relu1(outputs)
         outputs = self.dropout2(outputs)
+
         outputs = self.fc2(outputs)
+        outputs = self.fc_bn2(outputs)
+        outputs = self.fc_relu2(outputs)
+        outputs = self.dropout2(outputs)
+
+        outputs = self.fc3(outputs)
 
         return outputs

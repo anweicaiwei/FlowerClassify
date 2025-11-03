@@ -1,17 +1,17 @@
-import os
-import sys
-import json
 import argparse
 import glob
-from PIL import Image
+import json
+import os
+import sys
 
 import pandas as pd
 import torch
 import torchvision.transforms as transforms
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
-from utils import FlowerDataset  # 使用我们自定义的数据集类
 from model import FlowerNet
+
 
 # 定义一个简单的数据集类，只用于加载图像文件
 class SimpleImageDataset(Dataset):
@@ -27,19 +27,41 @@ class SimpleImageDataset(Dataset):
         if len(self.image_files) == 0:
             raise FileNotFoundError(f"在目录 {img_dir} 中未找到任何图像文件")
         
+        # 过滤掉无法打开的图像文件
+        valid_image_files = []
+        for img_path in self.image_files:
+            try:
+                with Image.open(img_path) as img:
+                    img.verify()  # 验证图像文件是否完整
+                valid_image_files.append(img_path)
+            except Exception as e:
+                print(f"警告：无法打开或验证图像文件 {img_path}: {e}")
+        
+        self.image_files = valid_image_files
+        if len(self.image_files) == 0:
+            raise FileNotFoundError(f"在目录 {img_dir} 中未找到有效的图像文件")
+        
     def __len__(self):
         return len(self.image_files)
     
     def __getitem__(self, idx):
         img_path = self.image_files[idx]
-        image = Image.open(img_path).convert('RGB')
-        img_name = os.path.basename(img_path)
-        
-        if self.transform:
-            image = self.transform(image)
-        
-        # 返回图像和文件名（不返回标签）
-        return image, img_name
+        try:
+            image = Image.open(img_path).convert('RGB')
+            img_name = os.path.basename(img_path)
+            
+            if self.transform:
+                image = self.transform(image)
+            
+            # 返回图像和文件名（不返回标签）
+            return image, img_name
+        except Exception as e:
+            print(f"错误：处理图像文件 {img_path} 时出错: {e}")
+            # 创建一个黑色占位图像作为替代
+            placeholder = Image.new('RGB', (400, 400), color='black')
+            if self.transform:
+                placeholder = self.transform(placeholder)
+            return placeholder, os.path.basename(img_path)
 
 def main():
     """主函数，执行模型预测"""
@@ -68,9 +90,11 @@ def main():
         print(f"错误：无法加载配置文件 {config_path}: {e}")
         sys.exit(1)
 
+    test_size = 400
     # 创建测试集的变换
     test_transform = transforms.Compose([
-        transforms.RandomResizedCrop(400, scale=(0.8, 1.0)),
+        transforms.Resize((test_size, test_size)),
+        transforms.CenterCrop(test_size),  # 确保图像大小一致
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])
