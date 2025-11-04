@@ -21,12 +21,12 @@ def main():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # 获取数据增强方法，用于训练集
-    augmentation = get_augmentations()
+    # augmentation = get_augmentations()
 
     # 创建训练集的变换（包含基本处理）
     # 改进数据增强策略
     # 修改训练集数据增强
-    valid_size = 400
+    img_size = configs.get('image-size', 400)
 
     # 定义训练集变换
     color_jitter = transforms.ColorJitter(
@@ -37,7 +37,7 @@ def main():
     )
 
     train_transform = transforms.Compose([
-        transforms.RandomResizedCrop(valid_size, scale=(0.7, 1.0)),
+        transforms.RandomResizedCrop(img_size, scale=(0.7, 1.0)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.2),
         transforms.RandomRotation(degrees=30),
@@ -51,8 +51,8 @@ def main():
 
     # 定义验证集变换
     valid_transform = transforms.Compose([
-        transforms.Resize((valid_size, valid_size)),
-        transforms.CenterCrop(valid_size),  # 确保图像大小一致
+        transforms.Resize((img_size, img_size)),
+        transforms.CenterCrop(img_size),  # 确保图像大小一致
         transforms.ToTensor(),
         transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
     ])

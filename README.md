@@ -78,12 +78,14 @@ pip install -r code/requirements.txt
 
 ### 训练模型
 ```bash
-python code/train.py
+cd code
+python train.py
 ```
 
 ### 生成预测结果
 ```bash
-python code/predict.py test/test results/submission.csv
+cd code
+python predict.py ../test/test ../results/submission.csv
 ```
 
 ## 高级功能
