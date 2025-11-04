@@ -3,6 +3,7 @@
   "data-root": "../../data/flowerclassify/train",
   "data-label": "../../data/flowerclassify/train_labels.csv",
   "valid-split-ratio": 0.3,
+  "image-size": 400,
   "test-csv-file": "datasets/test_split.csv",
   "test-img-dir": "datasets/test",
   "custom-model-params-path": "../model/best_model.pt",

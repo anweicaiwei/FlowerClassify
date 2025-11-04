@@ -53,6 +53,8 @@ class FlowerDataset(Dataset):
         # 创建类别映射
         self.category_to_idx = create_category_mapping(self.data_frame)
         self.num_classes = len(self.category_to_idx)
+        # 从配置中获取图像大小，默认为224
+        self.img_size = configs.get('image-size', 224)
 
     # 返回数据集大小
     def __len__(self):
@@ -92,9 +94,8 @@ class FlowerDataset(Dataset):
         except Exception as e:
             # 更详细的错误信息
             print(f"Error reading image {img_path}: {e}")
-            # 创建一个随机图像和标签，而不是返回前一个图像
-            # 这样可以避免数据泄露和重复样本
-            dummy_image = torch.rand(3, 400, 400, dtype=torch.float32)
+            # 使用配置中的图像大小创建dummy图像
+            dummy_image = torch.rand(3, self.img_size, self.img_size, dtype=torch.float32)
             dummy_label = random.randint(0, self.num_classes - 1)
             return dummy_image, dummy_label
 
