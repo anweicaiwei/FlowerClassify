@@ -4,6 +4,7 @@ import shutil
 import json  # 使用json模块读取配置
 import math
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -259,23 +260,75 @@ class L1RegularizedLoss(nn.Module):
         return self  # 支持链式调用
         
     def forward(self, outputs, targets):
-        """标准PyTorch损失函数接口，只接受outputs和targets"""
+        """扩展forward方法以支持Mixup的多参数输入"""
         if self.model is None:
             raise ValueError("模型未设置，请先调用set_model方法")
-            
-        # 计算交叉熵损失
-        ce_loss = self.cross_entropy_loss(outputs, targets)
+        
+        # 检查是否是Mixup数据格式 (targets是包含多个元素的元组)
+        if isinstance(targets, tuple) and len(targets) == 3:
+            # Mixup格式: (label1, label2, lam)
+            label1, label2, lam = targets
+            # 计算混合损失
+            ce_loss = lam * self.cross_entropy_loss(outputs, label1) + (1 - lam) * self.cross_entropy_loss(outputs, label2)
+        else:
+            # 标准分类格式
+            ce_loss = self.cross_entropy_loss(outputs, targets)
         
         # 计算L1正则化项
         l1_reg = 0.0
         with torch.no_grad():
-            for param in self.model.parameters():
-                if param.requires_grad:
-                    l1_reg += torch.sum(torch.abs(param))  # 使用torch.abs和torch.sum更高效
+            # 只对分类头参数计算L1正则化，避免在解冻所有层时损失爆炸
+            if hasattr(self.model, 'fc1'):  # 确保模型有fc1属性
+                for param in self.model.fc1.parameters():
+                    if param.requires_grad:
+                        l1_reg += torch.sum(torch.abs(param))
+            if hasattr(self.model, 'fc2'):
+                for param in self.model.fc2.parameters():
+                    if param.requires_grad:
+                        l1_reg += torch.sum(torch.abs(param))
+            if hasattr(self.model, 'fc3'):
+                for param in self.model.fc3.parameters():
+                    if param.requires_grad:
+                        l1_reg += torch.sum(torch.abs(param))
         
         # 组合损失
         total_loss = ce_loss + self.l1_lambda * l1_reg
+        # 确保返回的是标量
+        if total_loss.dim() > 0:
+            total_loss = total_loss.mean()
         return total_loss
+
+
+class MixupDataset(Dataset):
+    def __init__(self, dataset, alpha=0.4):
+        self.dataset = dataset
+        self.alpha = alpha
+        self.num_classes = dataset.num_classes
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, index):
+        # 获取原始数据
+        img1, label1 = self.dataset[index]
+        
+        # 随机选择另一个样本索引
+        index2 = random.randint(0, len(self.dataset) - 1)
+        img2, label2 = self.dataset[index2]
+        
+        # 生成mixup系数
+        if self.alpha > 0:
+            lam = np.random.beta(self.alpha, self.alpha)
+        else:
+            lam = 1.0
+        
+        # 确保lam是与batch_size匹配的张量格式
+        # 注意：在__getitem__中我们只处理单个样本，所以这里保持简单
+        
+        # 混合图像
+        mixed_img = lam * img1 + (1 - lam) * img2
+        
+        return mixed_img, label1, label2, lam
 
 
 class WarmupScheduler:
@@ -398,8 +451,8 @@ def get_optimizer(model_parameters, optimizer_type, learning_rate, weight_decay,
             param_groups,
             lr=learning_rate,
             weight_decay=weight_decay,
-            betas=(0.9, 0.999),  # 默认参数，但明确写出以便调整
-            eps=1e-8
+            betas=(0.9, 0.99),  # 默认参数，但明确写出以便调整
+            eps=1e-6
         )
     # SGD优化器：随机梯度下降优化器，适用于小批量数据
     elif optimizer_type == 'sgd':
@@ -493,12 +546,9 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
     # CosineAnnealingWarmRestarts学习率调度器：带热重启的余弦退火学习率调度器
     # 在余弦退火的基础上，定期重新开始学习率调度，有助于跳出局部最优
     elif scheduler_type == 'cosine_warm_restarts':
-        # T_0是第一个重启周期的大小
-        T_0 = kwargs.get('T_0', 10)
-        # T_mult控制后续重启周期的增长因子
-        T_mult = kwargs.get('T_mult', 2)
-        # eta_min是最小学习率，默认为0
-        eta_min = kwargs.get('eta_min', 0)
+        T_0 = kwargs.get('T_0', 10)  # 第一次重启的迭代次数
+        T_mult = kwargs.get('T_mult', 2)  # 重启周期的乘数因子
+        eta_min = kwargs.get('eta_min', 0)  # 最小学习率
         return optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer, 
             T_0=T_0, 
@@ -506,26 +556,23 @@ def get_lr_scheduler(optimizer, scheduler_type='step', **kwargs):
             eta_min=eta_min
         )
     else:
-        # 默认使用StepLR
+        # 默认使用StepLR学习率调度器
         print(f"警告：未知的学习率调度器类型 '{scheduler_type}'，默认使用StepLR")
+        step_size = kwargs.get('step_size', 10)
+        gamma = kwargs.get('gamma', 0.5)
         return optim.lr_scheduler.StepLR(
             optimizer, 
-            step_size=10, 
-            gamma=0.5
+            step_size=step_size, 
+            gamma=gamma
         )
 
 
-def main():
-    """主函数，当脚本直接运行时执行数据预处理"""
-    # 调用数据预处理函数，分割为train、valid两个数据集
-    prepare_datasets(
-        csv_file=configs['data-label'],
-        img_dir=configs['data-root'],
-        valid_ratio=configs['valid-split-ratio']
-    )
-    
-    print("\n数据预处理完成！已生成train、valid两个数据集及其CSV文件。")
-
-
+# 主函数，用于数据预处理和数据集分割
 if __name__ == '__main__':
-    main()
+    # 配置参数
+    csv_file = '../../FlowerClassify/datasets/train_labels.csv'  # 原始标签文件路径
+    img_dir = '../../FlowerClassify/datasets/train'  # 原始图像文件夹路径
+    valid_ratio = 0.15  # 验证集比例
+    
+    # 调用函数准备数据集
+    prepare_datasets(csv_file, img_dir, valid_ratio)

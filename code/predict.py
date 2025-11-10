@@ -46,11 +46,12 @@ class SimpleImageDataset(Dataset):
         except Exception as e:
             print(f"警告：无法打开或处理图像文件 {img_path}: {e}")
             # 创建一个黑色占位图像作为替代
-            placeholder = Image.new('RGB', (400, 400), color='black')
+            placeholder = Image.new('RGB', (224, 224), color='black')
             if self.transform:
                 placeholder = self.transform(placeholder)
             # 返回占位图像、文件名和无效标志
             return placeholder, img_name, False
+
 
 def main():
     """主函数，执行模型预测"""
@@ -79,13 +80,12 @@ def main():
         print(f"错误：无法加载配置文件 {config_path}: {e}")
         sys.exit(1)
 
-    img_size = configs.get('image-size', 400)
+    img_size = configs.get('image-size', 224)
     # 创建测试集的变换
     test_transform = transforms.Compose([
         transforms.Resize((img_size, img_size)),
-        transforms.CenterCrop(img_size),  # 确保图像大小一致
         transforms.ToTensor(),
-        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+        transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
     ])
 
     # 使用自定义的简单数据集类，只加载图像文件
@@ -116,17 +116,16 @@ def main():
     device = torch.device(configs['device'])
 
     # 初始化模型 - 根据配置文件传递所有必要参数
-    # 获取激活函数配置，默认为gelu
-    activation_fn = configs.get('activation-fn', 'gelu')
-    
     # 从配置中获取类别数量，如果没有则默认为100
     num_classes = configs.get('num-classes', 100)
+    use_layer_norm = configs.get('use-layer-norm', False)
     
+    # 在预测时完全不加载预训练模型
     model = FlowerNet(
         num_classes=num_classes,
-        model_name=configs.get('model-name', 'resnet18'),
-        use_layer_norm=configs.get('use-layer-norm', False),
-        activation_fn=activation_fn
+        use_layer_norm=use_layer_norm,
+        model_name=configs.get('model-name', 'dinov2_vitb14'),
+        load_pretrained=False
     )
     model = model.to(device)
 
@@ -134,8 +133,18 @@ def main():
 
     print(f'\n---------- prediction start at: {device} ----------\n')
     print(f'图像目录: {test_dir}')
-    # 添加激活函数信息打印
-    print(f'使用激活函数: {activation_fn}')
+    if use_layer_norm:
+        print(f'使用LayerNorm层')
+
+    # # 直接使用model文件夹下的best_model.pt文件
+    # model_params_path = "../model/best_model.pt"
+    #
+    # # 确保指定的模型参数文件存在
+    # if not os.path.exists(model_params_path):
+    #     print(f"错误：指定的模型参数文件不存在: {model_params_path}")
+    #     sys.exit(1)
+    #
+    # print(f"正在加载模型参数: {model_params_path}")
 
     # 从配置中获取自定义模型参数路径
     try:
@@ -179,7 +188,7 @@ def main():
     with torch.no_grad():
         # 加载模型检查点
         try:
-            model.load_state_dict(torch.load(model_params_path, map_location=device, weights_only=True))
+            model.load_state_dict(torch.load(model_params_path, map_location=device, weights_only=True), strict=False)
             model.eval()
             print(f"模型加载成功！开始预测...")
         except Exception as e:

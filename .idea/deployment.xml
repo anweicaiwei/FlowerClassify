@@ -5,7 +5,7 @@
       <paths name="submission">
         <serverdata>
           <mappings>
-            <mapping deploy="/3251903002/submisson" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/3251903002/submission" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
